@@ -151,7 +151,12 @@ export default function App() {
 
   const loadDeals = async (spId) => {
     const { data } = await supabase.from('deals').select('*').eq('salesperson_id', spId).eq('company', company).order('created_at')
-    setDeals(data || [])
+    const sorted = (data || []).sort((a, b) => {
+      const ai = MONTHS.indexOf(a.p1_date)
+      const bi = MONTHS.indexOf(b.p1_date)
+      return ai - bi
+    })
+    setDeals(sorted)
     loadReferrals(spId)
   }
 
@@ -162,27 +167,29 @@ export default function App() {
 
   const toggleP1 = async (deal) => {
     const nowPaid = !deal.p1_paid
-    const updates = { p1_paid: nowPaid, p1_paid_date: nowPaid ? new Date().toLocaleDateString('en-ZA') : null, p2_date: nowPaid ? getP2Month(deal.p1_date) : deal.p2_date }
+    const p2_date = nowPaid ? getP2Month(deal.p1_date) : deal.p2_date
+    const updates = { p1_paid: nowPaid, p1_paid_date: nowPaid ? new Date().toLocaleDateString('en-ZA') : null, p2_date }
     await supabase.from('deals').update(updates).eq('id', deal.id)
-    loadDeals(selectedSP?.id || profile.id)
+    setDeals(prev => prev.map(d => d.id === deal.id ? { ...d, ...updates } : d))
   }
 
   const toggleP2 = async (deal) => {
-    await supabase.from('deals').update({ p2_paid: !deal.p2_paid }).eq('id', deal.id)
-    loadDeals(selectedSP?.id || profile.id)
+    const updates = { p2_paid: !deal.p2_paid }
+    await supabase.from('deals').update(updates).eq('id', deal.id)
+    setDeals(prev => prev.map(d => d.id === deal.id ? { ...d, ...updates } : d))
   }
 
   const updateDate = async (deal, which, val) => {
     const updates = { [which]: val }
     if (which === 'p1_date' && !deal.p2_paid) updates.p2_date = getP2Month(val)
     await supabase.from('deals').update(updates).eq('id', deal.id)
+    setDeals(prev => prev.map(d => d.id === deal.id ? { ...d, ...updates } : d))
     setEditingDate(null)
-    loadDeals(selectedSP?.id || profile.id)
   }
 
   const updatePaymentStatus = async (id, val) => {
     await supabase.from('deals').update({ first_payment_received: val }).eq('id', id)
-    loadDeals(selectedSP?.id || profile.id)
+    setDeals(prev => prev.map(d => d.id === id ? { ...d, first_payment_received: val } : d))
   }
 
   const addDeal = async () => {
