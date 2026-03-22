@@ -16,6 +16,12 @@ const Badge = ({ paid }) => (
   </span>
 )
 
+const PaymentBadge = ({ val }) => {
+  const colors = { Yes:['#d1fae5','#065f46'], No:['#fee2e2','#991b1b'], TBC:['#fef3c7','#92400e'] }
+  const [bg, color] = colors[val] || colors.TBC
+  return <span style={{ padding:'2px 10px', borderRadius:20, fontSize:11, fontWeight:700, background:bg, color }}>{val||'TBC'}</span>
+}
+
 function Login() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -135,6 +141,11 @@ export default function App() {
     loadDeals(selectedSP?.id || profile.id)
   }
 
+  const updatePaymentStatus = async (id, val) => {
+    await supabase.from('deals').update({ first_payment_received: val }).eq('id', id)
+    loadDeals(selectedSP?.id || profile.id)
+  }
+
   const addDeal = async () => {
     if (!newDeal.client || !newDeal.p1_date) return
     const total = (newDeal.app_users*newDeal.a_user_cost)+(newDeal.lite_users*newDeal.l_user_cost)+Math.max(0,newDeal.admin-newDeal.free_admin)*newDeal.admin_cost+(newDeal.dashboards*newDeal.dash_cost)
@@ -189,10 +200,7 @@ export default function App() {
     loadReferrals(selectedSP?.id || profile.id)
   }
 
-  const updatePaymentStatus = async (id, val) => {
-    await supabase.from('deals').update({ first_payment_received: val }).eq('id', id)
-    loadDeals(selectedSP?.id || profile.id)
-  }
+  const signOut = () => supabase.auth.signOut()
 
   if (!session) return <Login />
   if (loading) return <div style={{ padding:40, textAlign:'center', color:'#64748b', fontFamily:"'Segoe UI',sans-serif" }}>Loading...</div>
@@ -432,7 +440,7 @@ export default function App() {
           <div style={{ overflowX:'auto' }}>
             <table style={{ width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 1px 4px #0001' }}>
               <thead>
-                <tr>{['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR',commLabel,'Billing Date','1st Payment',  'Notes',...(isAdmin?['Actions']:[])].map(h=>(
+                <tr>{['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR',commLabel,'Billing Date','1st Payment','Notes',...(isAdmin?['Actions']:[])].map(h=>(
                   <th key={h} style={th}>{h}</th>
                 ))}</tr>
               </thead>
@@ -453,19 +461,16 @@ export default function App() {
                     <td style={td}>
                       {isAdmin ? (
                         <select value={d.first_payment_received || 'TBC'} onChange={e=>updatePaymentStatus(d.id, e.target.value)}
-                          style={{ padding:'4px 8px', borderRadius:6, border:'1px solid #cbd5e1', fontSize:12, fontWeight:700,
-                            background: d.first_payment_received==='Yes' ? '#d1fae5' : d.first_payment_received==='No' ? '#fee2e2' : '#fef3c7',
-                            color: d.first_payment_received==='Yes' ? '#065f46' : d.first_payment_received==='No' ? '#991b1b' : '#92400e'
+                          style={{ padding:'4px 8px', borderRadius:6, border:'1px solid #cbd5e1', fontSize:12, fontWeight:700, cursor:'pointer',
+                            background: d.first_payment_received==='Yes'?'#d1fae5': d.first_payment_received==='No'?'#fee2e2':'#fef3c7',
+                            color: d.first_payment_received==='Yes'?'#065f46': d.first_payment_received==='No'?'#991b1b':'#92400e'
                           }}>
                           <option>TBC</option>
                           <option>Yes</option>
                           <option>No</option>
                         </select>
                       ) : (
-                        <span style={{ padding:'2px 10px', borderRadius:20, fontSize:11, fontWeight:700,
-                          background: d.first_payment_received==='Yes' ? '#d1fae5' : d.first_payment_received==='No' ? '#fee2e2' : '#fef3c7',
-                          color: d.first_payment_received==='Yes' ? '#065f46' : d.first_payment_received==='No' ? '#991b1b' : '#92400e'
-                        }}>{d.first_payment_received || 'TBC'}</span>
+                        <PaymentBadge val={d.first_payment_received} />
                       )}
                     </td>
                     <td style={{ ...td, color:'#64748b', fontSize:12 }}>{d.notes}</td>
