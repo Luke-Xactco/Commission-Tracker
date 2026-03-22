@@ -5,7 +5,7 @@ const fmt = (n) => `R ${Number(n).toLocaleString('en-ZA', { minimumFractionDigit
 const MONTHS = ['Nov-25','Dec-25','Jan-26','Feb-26','Mar-26','Apr-26','May-26','Jun-26','Jul-26','Aug-26','Sept-26','Oct-26','Nov-26','Dec-26','Jan-27','Feb-27','Mar-27','Apr-27','May-27','Jun-27']
 const getP2Month = (p1) => { const i = MONTHS.indexOf(p1); return i !== -1 && MONTHS[i+6] ? MONTHS[i+6] : '' }
 const COMPANY_COLORS = { xactco: '#6366f1', bloodhound: '#ef4444' }
-const BLANK_DEAL = { month:'Jan-26', client:'', once_off:0, app_users:0, lite_users:0, a_user_cost:950, l_user_cost:0, admin:1, free_admin:0, admin_cost:1000, dashboards:0, dash_cost:0, billing_date:'', p1_date:'', notes:'' }
+const BLANK_DEAL = { month:'Jan-26', client:'', once_off:0, app_users:0, lite_users:0, a_user_cost:950, l_user_cost:0, admin:1, free_admin:0, admin_cost:1000, dashboards:0, dash_cost:0, billing_date:'', p1_date:'', notes:'', first_payment_received:'TBC' }
 const BLANK_REFERRAL = { referred_by:'', client:'', mrr:0, date:'', paid:false }
 const LUKE_ID = 'f3b67113-e524-403e-9191-f3b0621e46a3'
 const getReferralBonus = (mrr) => Math.round(mrr * 0.25)
@@ -189,7 +189,10 @@ export default function App() {
     loadReferrals(selectedSP?.id || profile.id)
   }
 
-  const signOut = () => supabase.auth.signOut()
+  const updatePaymentStatus = async (id, val) => {
+    await supabase.from('deals').update({ first_payment_received: val }).eq('id', id)
+    loadDeals(selectedSP?.id || profile.id)
+  }
 
   if (!session) return <Login />
   if (loading) return <div style={{ padding:40, textAlign:'center', color:'#64748b', fontFamily:"'Segoe UI',sans-serif" }}>Loading...</div>
@@ -429,7 +432,7 @@ export default function App() {
           <div style={{ overflowX:'auto' }}>
             <table style={{ width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 1px 4px #0001' }}>
               <thead>
-                <tr>{['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR',commLabel,'Billing Date','Notes',...(isAdmin?['Actions']:[])].map(h=>(
+                <tr>{['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR',commLabel,'Billing Date','1st Payment',  'Notes',...(isAdmin?['Actions']:[])].map(h=>(
                   <th key={h} style={th}>{h}</th>
                 ))}</tr>
               </thead>
@@ -447,6 +450,24 @@ export default function App() {
                     <td style={td}>{fmt(d.arr)}</td>
                     <td style={{ ...td, fontWeight:700, color:accentColor }}>{fmt(d.comm)}</td>
                     <td style={td}>{d.billing_date}</td>
+                    <td style={td}>
+                      {isAdmin ? (
+                        <select value={d.first_payment_received || 'TBC'} onChange={e=>updatePaymentStatus(d.id, e.target.value)}
+                          style={{ padding:'4px 8px', borderRadius:6, border:'1px solid #cbd5e1', fontSize:12, fontWeight:700,
+                            background: d.first_payment_received==='Yes' ? '#d1fae5' : d.first_payment_received==='No' ? '#fee2e2' : '#fef3c7',
+                            color: d.first_payment_received==='Yes' ? '#065f46' : d.first_payment_received==='No' ? '#991b1b' : '#92400e'
+                          }}>
+                          <option>TBC</option>
+                          <option>Yes</option>
+                          <option>No</option>
+                        </select>
+                      ) : (
+                        <span style={{ padding:'2px 10px', borderRadius:20, fontSize:11, fontWeight:700,
+                          background: d.first_payment_received==='Yes' ? '#d1fae5' : d.first_payment_received==='No' ? '#fee2e2' : '#fef3c7',
+                          color: d.first_payment_received==='Yes' ? '#065f46' : d.first_payment_received==='No' ? '#991b1b' : '#92400e'
+                        }}>{d.first_payment_received || 'TBC'}</span>
+                      )}
+                    </td>
                     <td style={{ ...td, color:'#64748b', fontSize:12 }}>{d.notes}</td>
                     {isAdmin && <td style={td}>
                       <div style={{ display:'flex', gap:6 }}>
