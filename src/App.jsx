@@ -1,4 +1,8 @@
-import { useState, useEffect } from 'react'
+{newReferral.mrr > 0 && (
+                  <div style={{ marginTop:10, fontSize:13, color:accentColor, fontWeight:600 }}>
+                    💰 Monthly Fee: <strong>{fmt(newReferral.mrr)}</strong> → 25% Referral Bonus: <strong>{fmt(getReferralBonus(newReferral.mrr))}</strong>
+                  </div>
+                )}import { useState, useEffect } from 'react'
 import { supabase } from './supabase'
 
 const fmt = (n) => `R ${Number(n).toLocaleString('en-ZA', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
@@ -9,20 +13,8 @@ const BLANK_DEAL = { month:'Jan-26', client:'', once_off:0, app_users:0, lite_us
 const BLANK_REFERRAL = { referred_by:'', client:'', mrr:0, date:'', paid:false }
 const LUKE_ID = 'f3b67113-e524-403e-9191-f3b0621e46a3'
 
-const REFERRAL_TIERS = [
-  { min:0,      max:10000,  bonus:2500  },
-  { min:10001,  max:20000,  bonus:5000  },
-  { min:20001,  max:30000,  bonus:7500  },
-  { min:30001,  max:40000,  bonus:10000 },
-  { min:40001,  max:50000,  bonus:12500 },
-  { min:50001,  max:60000,  bonus:15000 },
-  { min:60001,  max:100000, bonus:17500 },
-  { min:100001, max:999999, bonus:25000 },
-]
-const getReferralBonus = (mrr) => {
-  const tier = REFERRAL_TIERS.find(t => mrr >= t.min && mrr <= t.max)
-  return tier ? tier.bonus : 0
-}
+const REFERRAL_TIERS = []
+const getReferralBonus = (mrr) => Math.round(mrr * 0.25)
 
 const Badge = ({ paid }) => (
   <span style={{ padding:'2px 10px', borderRadius:20, fontSize:11, fontWeight:700, background:paid?'#d1fae5':'#fef3c7', color:paid?'#065f46':'#92400e' }}>
@@ -487,7 +479,7 @@ export default function App() {
               <div style={{ ...card, border:`2px solid ${accentColor}`, marginBottom:16 }}>
                 <h3 style={{ margin:'0 0 14px', color:accentColor, fontSize:15 }}>New Referral</h3>
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10 }}>
-                  {[['Referred By','referred_by','text'],['Client Name','client','text'],['Monthly Value (MRR)','mrr','number'],['Date','date','text']].map(([label,key,type])=>(
+                  {[['Referred By','referred_by','text'],['Client Name','client','text'],['Monthly Fee (MRR)','mrr','number'],['Date','date','text']].map(([label,key,type])=>(
                     <div key={key}>
                       <div style={{ fontSize:11, fontWeight:600, color:'#64748b', marginBottom:3 }}>{label}</div>
                       <input type={type} value={newReferral[key]} onChange={e=>setNewReferral(p=>({...p,[key]:type==='number'?parseFloat(e.target.value)||0:e.target.value}))}
@@ -515,7 +507,7 @@ export default function App() {
               <div style={{ overflowX:'auto' }}>
                 <table style={{ width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 1px 4px #0001' }}>
                   <thead>
-                    <tr>{['Referred By','Client','MRR','25% Bonus','Date','Status','Action',''].map((h,i)=>(
+                    <tr>{['Referred By','Client','Monthly Fee','25% Bonus','Date','Status','Action',''].map((h,i)=>(
                       <th key={i} style={th}>{h}</th>
                     ))}</tr>
                   </thead>
