@@ -10,6 +10,45 @@ const BLANK_REFERRAL = { referred_by:'', client:'', mrr:0, date:'', paid:false }
 const LUKE_ID = 'f3b67113-e524-403e-9191-f3b0621e46a3'
 const getReferralBonus = (mrr) => Math.round(mrr * 0.25)
 
+const exportToExcel = (deals, referrals, name, isLukeView) => {
+  const fmtN = (n) => Number(n || 0).toFixed(2)
+
+  // Sheet 1: Payout Summary
+  const payoutHeaders = ['Client','Monthly Deal','ARR','Commission','Payout 1','P1 Date','P1 Status',
+    ...(!isLukeView ? ['Payout 2','P2 Date','P2 Status'] : [])]
+  const payoutRows = deals.map(d => [
+    d.client, fmtN(d.total), fmtN(d.arr), fmtN(d.comm),
+    fmtN(d.p1), d.p1_date || '', d.p1_paid ? 'PAID' : 'PENDING',
+    ...(!isLukeView ? [fmtN(d.p2), d.p2_date || '', d.p2_paid ? 'PAID' : 'PENDING'] : [])
+  ])
+
+  // Sheet 2: Referrals
+  const refHeaders = ['Referred By','Client','Monthly Fee','25% Bonus','Date','Status']
+  const refRows = referrals.map(r => [r.referred_by, r.client, fmtN(r.mrr), fmtN(r.bonus), r.date || '', r.paid ? 'PAID' : 'PENDING'])
+
+  // Build CSV content with two sections
+  const toCSV = (headers, rows) => {
+    const escape = v => `"${String(v).replace(/"/g,'""')}"`
+    return [headers, ...rows].map(r => r.map(escape).join(',')).join('\n')
+  }
+
+  const content = [
+    `PAYOUT SUMMARY — ${name}`,
+    toCSV(payoutHeaders, payoutRows),
+    '',
+    `REFERRALS — ${name}`,
+    toCSV(refHeaders, refRows),
+  ].join('\n')
+
+  const blob = new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${name}_Commission_${new Date().toLocaleDateString('en-ZA').replace(/\//g,'-')}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
 const Badge = ({ paid }) => (
   <span style={{ padding:'2px 10px', borderRadius:20, fontSize:11, fontWeight:700, background:paid?'#d1fae5':'#fef3c7', color:paid?'#065f46':'#92400e' }}>
     {paid ? 'PAID' : 'PENDING'}
@@ -293,6 +332,7 @@ export default function App() {
           </div>
           <div style={{ display:'flex', gap:10, alignItems:'center' }}>
             <button onClick={()=>setShowAdd(!showAdd)} style={{ padding:'8px 16px', background:accentColor, color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer', fontSize:13 }}>+ Add Deal</button>
+            <button onClick={()=>exportToExcel(deals, referrals, displayName || 'Export', isLukeView)} style={{ padding:'8px 16px', background:'#10b981', color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer', fontSize:13 }}>⬇ Export</button>
             <button onClick={signOut} style={{ padding:'8px 14px', background:'#e2e8f0', border:'none', borderRadius:8, fontWeight:600, cursor:'pointer', fontSize:13, color:'#475569' }}>Sign Out</button>
           </div>
         </div>
@@ -382,7 +422,7 @@ export default function App() {
             <table style={{ width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 1px 4px #0001' }}>
               <thead>
                 <tr>
-                  {['Client','Monthly Deal','× 12 (ARR)',commLabel,'Payout 1','P1 Date','P1 Status',
+                  {['Client','Monthly Deal','× 12 (ARR)',commLabel,'Payout 1','P1 Date','P1 Status','1st Payment',
                     ...(isAdmin?['']:[]),
                     ...(!isLukeView?['Payout 2','P2 Date','P2 Status',...(isAdmin?['']:[])]:[])
                   ].map((h,i)=>(
@@ -400,6 +440,21 @@ export default function App() {
                     <td style={td}>{fmt(d.p1)}</td>
                     <td style={td}><DateCell deal={d} which='p1_date' disabled={false} /></td>
                     <td style={td}><Badge paid={d.p1_paid} /></td>
+                    <td style={td}>
+                      {isAdmin ? (
+                        <select value={d.first_payment_received || 'TBC'} onChange={e=>updatePaymentStatus(d.id, e.target.value)}
+                          style={{ padding:'4px 8px', borderRadius:6, border:'1px solid #cbd5e1', fontSize:12, fontWeight:700, cursor:'pointer',
+                            background: d.first_payment_received==='Yes'?'#d1fae5': d.first_payment_received==='No'?'#fee2e2':'#fef3c7',
+                            color: d.first_payment_received==='Yes'?'#065f46': d.first_payment_received==='No'?'#991b1b':'#92400e'
+                          }}>
+                          <option>TBC</option>
+                          <option>Yes</option>
+                          <option>No</option>
+                        </select>
+                      ) : (
+                        <PaymentBadge val={d.first_payment_received} />
+                      )}
+                    </td>
                     {isAdmin && <td style={td}><button onClick={()=>toggleP1(d)} style={actionBtn(d.p1_paid?'#991b1b':'#065f46',d.p1_paid?'#fee2e2':'#d1fae5')}>{d.p1_paid?'↩ Unpaid':'✓ Mark Paid'}</button></td>}
                     {!isLukeView && <>
                       <td style={{ ...td, background:'#faf5ff' }}>{fmt(d.p2)}</td>
