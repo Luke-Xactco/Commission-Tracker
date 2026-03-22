@@ -1,8 +1,4 @@
-{newReferral.mrr > 0 && (
-                  <div style={{ marginTop:10, fontSize:13, color:accentColor, fontWeight:600 }}>
-                    💰 Monthly Fee: <strong>{fmt(newReferral.mrr)}</strong> → 25% Referral Bonus: <strong>{fmt(getReferralBonus(newReferral.mrr))}</strong>
-                  </div>
-                )}import { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from './supabase'
 
 const fmt = (n) => `R ${Number(n).toLocaleString('en-ZA', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`
@@ -12,8 +8,6 @@ const COMPANY_COLORS = { xactco: '#6366f1', bloodhound: '#ef4444' }
 const BLANK_DEAL = { month:'Jan-26', client:'', once_off:0, app_users:0, lite_users:0, a_user_cost:950, l_user_cost:0, admin:1, free_admin:0, admin_cost:1000, dashboards:0, dash_cost:0, billing_date:'', p1_date:'', notes:'' }
 const BLANK_REFERRAL = { referred_by:'', client:'', mrr:0, date:'', paid:false }
 const LUKE_ID = 'f3b67113-e524-403e-9191-f3b0621e46a3'
-
-const REFERRAL_TIERS = []
 const getReferralBonus = (mrr) => Math.round(mrr * 0.25)
 
 const Badge = ({ paid }) => (
@@ -204,6 +198,7 @@ export default function App() {
   const isLukeView = selectedSP?.id === LUKE_ID || (!isAdmin && profile?.id === LUKE_ID)
   const accentColor = selectedSP?.color || profile?.color || COMPANY_COLORS[company]
   const displayName = isAdmin ? selectedSP?.name : profile?.name
+  const commLabel = isLukeView ? 'Commission' : '8% Comm'
 
   const totalComm = deals.reduce((s,d)=>s+d.comm,0)
   const totalPaid = deals.reduce((s,d)=>s+(d.p1_paid?d.p1:0)+(d.p2_paid?d.p2:0),0)
@@ -272,8 +267,6 @@ export default function App() {
       </div>
     )
   }
-
-  const commLabel = isLukeView ? 'Commission' : '8% Comm'
 
   return (
     <div style={css}>
@@ -378,9 +371,9 @@ export default function App() {
             <table style={{ width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 1px 4px #0001' }}>
               <thead>
                 <tr>
-                  {['Client','Monthly Deal','× 12 (ARR)', commLabel,'Payout 1','P1 Date','P1 Status',
-                    ...(isAdmin ? [''] : []),
-                    ...(!isLukeView ? ['Payout 2','P2 Date','P2 Status', ...(isAdmin ? [''] : [])] : [])
+                  {['Client','Monthly Deal','× 12 (ARR)',commLabel,'Payout 1','P1 Date','P1 Status',
+                    ...(isAdmin?['']:[]),
+                    ...(!isLukeView?['Payout 2','P2 Date','P2 Status',...(isAdmin?['']:[])]:[])
                   ].map((h,i)=>(
                     <th key={i} style={{ ...th, background:i>=8?'#ede9fe':'#f1f5f9' }}>{h}</th>
                   ))}
@@ -436,7 +429,7 @@ export default function App() {
           <div style={{ overflowX:'auto' }}>
             <table style={{ width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 1px 4px #0001' }}>
               <thead>
-                <tr>{['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR', commLabel,'Billing Date','Notes',...(isAdmin?['Actions']:[])].map(h=>(
+                <tr>{['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR',commLabel,'Billing Date','Notes',...(isAdmin?['Actions']:[])].map(h=>(
                   <th key={h} style={th}>{h}</th>
                 ))}</tr>
               </thead>
@@ -479,7 +472,7 @@ export default function App() {
               <div style={{ ...card, border:`2px solid ${accentColor}`, marginBottom:16 }}>
                 <h3 style={{ margin:'0 0 14px', color:accentColor, fontSize:15 }}>New Referral</h3>
                 <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10 }}>
-                  {[['Referred By','referred_by','text'],['Client Name','client','text'],['Monthly Fee (MRR)','mrr','number'],['Date','date','text']].map(([label,key,type])=>(
+                  {[['Referred By','referred_by','text'],['Client Name','client','text'],['Monthly Fee','mrr','number'],['Date','date','text']].map(([label,key,type])=>(
                     <div key={key}>
                       <div style={{ fontSize:11, fontWeight:600, color:'#64748b', marginBottom:3 }}>{label}</div>
                       <input type={type} value={newReferral[key]} onChange={e=>setNewReferral(p=>({...p,[key]:type==='number'?parseFloat(e.target.value)||0:e.target.value}))}
@@ -489,7 +482,7 @@ export default function App() {
                 </div>
                 {newReferral.mrr > 0 && (
                   <div style={{ marginTop:10, fontSize:13, color:accentColor, fontWeight:600 }}>
-                    💰 Referral bonus: <strong>{fmt(getReferralBonus(newReferral.mrr))}</strong>
+                    💰 Monthly Fee: <strong>{fmt(newReferral.mrr)}</strong> → 25% Referral Bonus: <strong>{fmt(getReferralBonus(newReferral.mrr))}</strong>
                   </div>
                 )}
                 <div style={{ marginTop:14, display:'flex', gap:10 }}>
