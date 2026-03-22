@@ -10,43 +10,37 @@ const BLANK_REFERRAL = { referred_by:'', client:'', mrr:0, date:'', paid:false }
 const LUKE_ID = 'f3b67113-e524-403e-9191-f3b0621e46a3'
 const getReferralBonus = (mrr) => Math.round(mrr * 0.25)
 
-const exportToExcel = (deals, referrals, name, isLukeView) => {
-  const fmtN = (n) => Number(n || 0).toFixed(2)
+const exportToExcel = async (deals, referrals, name, isLukeView) => {
+  const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs')
+  const fmtN = (n) => Number(n || 0)
 
-  // Sheet 1: Payout Summary
-  const payoutHeaders = ['Client','Monthly Deal','ARR','Commission','Payout 1','P1 Date','P1 Status',
+  // Payout Summary sheet
+  const payoutHeaders = ['Client','Monthly Deal','ARR','Commission','Payout 1','P1 Date','P1 Status','1st Payment',
     ...(!isLukeView ? ['Payout 2','P2 Date','P2 Status'] : [])]
   const payoutRows = deals.map(d => [
     d.client, fmtN(d.total), fmtN(d.arr), fmtN(d.comm),
     fmtN(d.p1), d.p1_date || '', d.p1_paid ? 'PAID' : 'PENDING',
+    d.first_payment_received || 'TBC',
     ...(!isLukeView ? [fmtN(d.p2), d.p2_date || '', d.p2_paid ? 'PAID' : 'PENDING'] : [])
   ])
 
-  // Sheet 2: Referrals
+  // Referrals sheet
   const refHeaders = ['Referred By','Client','Monthly Fee','25% Bonus','Date','Status']
   const refRows = referrals.map(r => [r.referred_by, r.client, fmtN(r.mrr), fmtN(r.bonus), r.date || '', r.paid ? 'PAID' : 'PENDING'])
 
-  // Build CSV content with two sections
-  const toCSV = (headers, rows) => {
-    const escape = v => `"${String(v).replace(/"/g,'""')}"`
-    return [headers, ...rows].map(r => r.map(escape).join(',')).join('\n')
-  }
+  const wb = XLSX.utils.book_new()
 
-  const content = [
-    `PAYOUT SUMMARY — ${name}`,
-    toCSV(payoutHeaders, payoutRows),
-    '',
-    `REFERRALS — ${name}`,
-    toCSV(refHeaders, refRows),
-  ].join('\n')
+  // Sheet 1
+  const ws1 = XLSX.utils.aoa_to_sheet([payoutHeaders, ...payoutRows])
+  ws1['!cols'] = payoutHeaders.map(h => ({ wch: Math.max(h.length + 2, 14) }))
+  XLSX.utils.book_append_sheet(wb, ws1, 'Payout Summary')
 
-  const blob = new Blob(['\uFEFF' + content], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = `${name}_Commission_${new Date().toLocaleDateString('en-ZA').replace(/\//g,'-')}.csv`
-  a.click()
-  URL.revokeObjectURL(url)
+  // Sheet 2
+  const ws2 = XLSX.utils.aoa_to_sheet([refHeaders, ...refRows])
+  ws2['!cols'] = refHeaders.map(h => ({ wch: Math.max(h.length + 2, 14) }))
+  XLSX.utils.book_append_sheet(wb, ws2, 'Referrals')
+
+  XLSX.writeFile(wb, `${name}_Commission_${new Date().toLocaleDateString('en-ZA').replace(/\//g,'-')}.xlsx`)
 }
 
 const Badge = ({ paid }) => (
