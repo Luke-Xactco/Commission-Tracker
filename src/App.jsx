@@ -62,6 +62,7 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false)
   const [newDeal, setNewDeal] = useState(BLANK_DEAL)
   const [editingDate, setEditingDate] = useState(null)
+  const [editingDeal, setEditingDeal] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -137,6 +138,21 @@ export default function App() {
     loadDeals(spId)
   }
 
+  const deleteDeal = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this deal?')) return
+    await supabase.from('deals').delete().eq('id', id)
+    loadDeals(selectedSP?.id || profile.id)
+  }
+
+  const saveEditedDeal = async () => {
+    if (!editingDeal) return
+    const total = (editingDeal.app_users*editingDeal.a_user_cost)+(editingDeal.lite_users*editingDeal.l_user_cost)+Math.max(0,editingDeal.admin-editingDeal.free_admin)*editingDeal.admin_cost+(editingDeal.dashboards*editingDeal.dash_cost)
+    const arr = total*12; const comm = arr*0.08
+    await supabase.from('deals').update({ ...editingDeal, total, arr, comm, p1:comm/2, p2:comm/2 }).eq('id', editingDeal.id)
+    setEditingDeal(null)
+    loadDeals(selectedSP?.id || profile.id)
+  }
+
   const signOut = () => supabase.auth.signOut()
 
   if (!session) return <Login />
@@ -156,6 +172,42 @@ export default function App() {
   const td = { padding:'10px 14px', fontSize:13, color:'#1e293b', borderBottom:'1px solid #f1f5f9', verticalAlign:'middle' }
   const tabBtn = (t) => ({ padding:'8px 20px', borderRadius:8, border:'none', cursor:'pointer', fontWeight:600, fontSize:13, background:tab===t?accentColor:'#e2e8f0', color:tab===t?'#fff':'#475569' })
   const actionBtn = (color, bg) => ({ padding:'5px 12px', fontSize:11, borderRadius:6, border:'none', cursor:'pointer', fontWeight:700, background:bg, color, whiteSpace:'nowrap' })
+
+  // Edit Deal Modal
+  const EditModal = () => {
+    if (!editingDeal) return null
+    return (
+      <div style={{ position:'fixed', top:0, left:0, right:0, bottom:0, background:'#0008', zIndex:1000, display:'flex', alignItems:'center', justifyContent:'center' }}>
+        <div style={{ background:'#fff', borderRadius:16, padding:28, width:700, maxHeight:'80vh', overflowY:'auto', boxShadow:'0 8px 32px #0003' }}>
+          <h3 style={{ margin:'0 0 18px', color:accentColor, fontSize:16 }}>Edit Deal — {editingDeal.client}</h3>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10 }}>
+            {[['Signed Month','month','select'],['Client Name','client','text'],['Once Off (R)','once_off','number'],
+              ['App Users','app_users','number'],['Lite Users','lite_users','number'],
+              ['App User Cost','a_user_cost','number'],['Lite User Cost','l_user_cost','number'],
+              ['Admins','admin','number'],['Free Admins','free_admin','number'],['Admin Cost','admin_cost','number'],
+              ['Dashboards','dashboards','number'],['Dashboard Cost','dash_cost','number'],
+              ['Billing Date','billing_date','text'],['Payout 1 Month','p1_date','select'],['Notes','notes','text'],
+            ].map(([label,key,type])=>(
+              <div key={key}>
+                <div style={{ fontSize:11, fontWeight:600, color:'#64748b', marginBottom:3 }}>{label}</div>
+                {type==='select'
+                  ? <select value={editingDeal[key]} onChange={e=>setEditingDeal(p=>({...p,[key]:e.target.value}))} style={{ width:'100%', padding:'6px 8px', borderRadius:6, border:'1px solid #cbd5e1', fontSize:13 }}>
+                      {MONTHS.map(m=><option key={m}>{m}</option>)}
+                    </select>
+                  : <input type={type} value={editingDeal[key]} onChange={e=>setEditingDeal(p=>({...p,[key]:type==='number'?parseFloat(e.target.value)||0:e.target.value}))}
+                      style={{ width:'100%', padding:'6px 8px', borderRadius:6, border:'1px solid #cbd5e1', fontSize:13, boxSizing:'border-box' }} />
+                }
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop:18, display:'flex', gap:10 }}>
+            <button onClick={saveEditedDeal} style={{ padding:'8px 18px', background:accentColor, color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer' }}>Save Changes</button>
+            <button onClick={()=>setEditingDeal(null)} style={{ padding:'8px 18px', background:'#e2e8f0', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer' }}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   const DateCell = ({ deal, which, disabled }) => {
     const isEditing = editingDate?.id===deal.id && editingDate?.which===which
@@ -181,6 +233,7 @@ export default function App() {
 
   return (
     <div style={css}>
+      <EditModal />
       <div style={{ maxWidth:1200, margin:'0 auto' }}>
 
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
@@ -329,7 +382,7 @@ export default function App() {
           <div style={{ overflowX:'auto' }}>
             <table style={{ width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 1px 4px #0001' }}>
               <thead>
-                <tr>{['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR','8% Comm','Billing Date','Notes'].map(h=>(
+                <tr>{['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR','8% Comm','Billing Date','Notes', ...(isAdmin?['Actions']:[])].map(h=>(
                   <th key={h} style={th}>{h}</th>
                 ))}</tr>
               </thead>
@@ -348,6 +401,12 @@ export default function App() {
                     <td style={{ ...td, fontWeight:700, color:accentColor }}>{fmt(d.comm)}</td>
                     <td style={td}>{d.billing_date}</td>
                     <td style={{ ...td, color:'#64748b', fontSize:12 }}>{d.notes}</td>
+                    {isAdmin && <td style={td}>
+                      <div style={{ display:'flex', gap:6 }}>
+                        <button onClick={()=>setEditingDeal(d)} style={actionBtn('#1e293b','#e2e8f0')}>✏️ Edit</button>
+                        <button onClick={()=>deleteDeal(d.id)} style={actionBtn('#991b1b','#fee2e2')}>🗑 Delete</button>
+                      </div>
+                    </td>}
                   </tr>
                 ))}
               </tbody>
