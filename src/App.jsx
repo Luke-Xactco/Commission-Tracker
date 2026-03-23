@@ -8,38 +8,34 @@ const COMPANY_COLORS = { xactco: '#6366f1', bloodhound: '#ef4444' }
 const BLANK_DEAL = { month:'Jan-26', client:'', once_off:0, app_users:0, lite_users:0, a_user_cost:950, l_user_cost:0, admin:1, free_admin:0, admin_cost:1000, dashboards:0, dash_cost:0, billing_date:'', p1_date:'', notes:'', first_payment_received:'TBC' }
 const BLANK_REFERRAL = { referred_by:'', client:'', mrr:0, date:'', paid:false }
 const LUKE_ID = 'f3b67113-e524-403e-9191-f3b0621e46a3'
+const BERNARD_ID = 'bc508a11-e937-46a6-acc2-fd7c8e575767'
+const ROMAINE_ID = '294f7939-a6c5-40ce-ad6e-1631f243ecd5'
+const APPROVERS = [
+  { id: LUKE_ID,    name: 'Luke',    key: 'approved_luke'    },
+  { id: BERNARD_ID, name: 'Bernard', key: 'approved_bernard' },
+  { id: ROMAINE_ID, name: 'Romaine', key: 'approved_romaine' },
+]
 const getReferralBonus = (mrr) => Math.round(mrr * 0.25)
 
 const exportToExcel = async (deals, referrals, name, isLukeView) => {
   const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs')
   const fmtN = (n) => Number(n || 0)
-
-  // Payout Summary sheet
   const payoutHeaders = ['Client','Monthly Deal','ARR','Commission','Payout 1','P1 Date','P1 Status','1st Payment',
     ...(!isLukeView ? ['Payout 2','P2 Date','P2 Status'] : [])]
   const payoutRows = deals.map(d => [
     d.client, fmtN(d.total), fmtN(d.arr), fmtN(d.comm),
-    fmtN(d.p1), d.p1_date || '', d.p1_paid ? 'PAID' : 'PENDING',
-    d.first_payment_received || 'TBC',
-    ...(!isLukeView ? [fmtN(d.p2), d.p2_date || '', d.p2_paid ? 'PAID' : 'PENDING'] : [])
+    fmtN(d.p1), d.p1_date||'', d.p1_paid?'PAID':'PENDING', d.first_payment_received||'TBC',
+    ...(!isLukeView ? [fmtN(d.p2), d.p2_date||'', d.p2_paid?'PAID':'PENDING'] : [])
   ])
-
-  // Referrals sheet
   const refHeaders = ['Referred By','Client','Monthly Fee','25% Bonus','Date','Status']
-  const refRows = referrals.map(r => [r.referred_by, r.client, fmtN(r.mrr), fmtN(r.bonus), r.date || '', r.paid ? 'PAID' : 'PENDING'])
-
+  const refRows = referrals.map(r => [r.referred_by, r.client, fmtN(r.mrr), fmtN(r.bonus), r.date||'', r.paid?'PAID':'PENDING'])
   const wb = XLSX.utils.book_new()
-
-  // Sheet 1
   const ws1 = XLSX.utils.aoa_to_sheet([payoutHeaders, ...payoutRows])
-  ws1['!cols'] = payoutHeaders.map(h => ({ wch: Math.max(h.length + 2, 14) }))
+  ws1['!cols'] = payoutHeaders.map(h => ({ wch: Math.max(h.length+2, 14) }))
   XLSX.utils.book_append_sheet(wb, ws1, 'Payout Summary')
-
-  // Sheet 2
   const ws2 = XLSX.utils.aoa_to_sheet([refHeaders, ...refRows])
-  ws2['!cols'] = refHeaders.map(h => ({ wch: Math.max(h.length + 2, 14) }))
+  ws2['!cols'] = refHeaders.map(h => ({ wch: Math.max(h.length+2, 14) }))
   XLSX.utils.book_append_sheet(wb, ws2, 'Referrals')
-
   XLSX.writeFile(wb, `${name}_Commission_${new Date().toLocaleDateString('en-ZA').replace(/\//g,'-')}.xlsx`)
 }
 
@@ -60,14 +56,12 @@ function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-
   const handleLogin = async () => {
     setLoading(true); setError('')
     const { error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) setError(error.message)
     setLoading(false)
   }
-
   return (
     <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', background:'#f8fafc', fontFamily:"'Segoe UI',sans-serif" }}>
       <div style={{ background:'#fff', borderRadius:16, padding:40, width:360, boxShadow:'0 4px 24px #0001' }}>
@@ -122,7 +116,7 @@ export default function App() {
 
   useEffect(() => {
     if (!profile) return
-    if (profile.role === 'admin') loadAllProfiles()
+    if (profile.role === 'admin' || profile.role === 'manager') loadAllProfiles()
     else loadDeals(profile.id)
   }, [profile, company])
 
@@ -138,6 +132,7 @@ export default function App() {
 
   const loadAllProfiles = async () => {
     const { data } = await supabase.from('profiles').select('*').eq('company', company)
+    // Only show salesperson and admin tabs — not managers
     const sps = (data || []).filter(p => p.role === 'salesperson' || p.role === 'admin')
     setProfiles(sps)
     if (sps.length) setSelectedSP(sps[0])
@@ -145,11 +140,7 @@ export default function App() {
 
   const loadDeals = async (spId) => {
     const { data } = await supabase.from('deals').select('*').eq('salesperson_id', spId).eq('company', company).order('created_at')
-    const sorted = (data || []).sort((a, b) => {
-      const ai = MONTHS.indexOf(a.p1_date)
-      const bi = MONTHS.indexOf(b.p1_date)
-      return ai - bi
-    })
+    const sorted = (data || []).sort((a,b) => MONTHS.indexOf(a.p1_date) - MONTHS.indexOf(b.p1_date))
     setDeals(sorted)
     loadReferrals(spId)
   }
@@ -186,17 +177,24 @@ export default function App() {
     setDeals(prev => prev.map(d => d.id === id ? { ...d, first_payment_received: val } : d))
   }
 
+  const toggleApproval = async (id, key, table, setter) => {
+    const current = table === 'deals' ? deals.find(d => d.id === id) : referrals.find(r => r.id === id)
+    const updates = { [key]: !current[key] }
+    await supabase.from(table).update(updates).eq('id', id)
+    setter(prev => prev.map(x => x.id === id ? { ...x, ...updates } : x))
+  }
+
   const addDeal = async () => {
     if (!newDeal.client || !newDeal.p1_date) return
     const total = (newDeal.app_users*newDeal.a_user_cost)+(newDeal.lite_users*newDeal.l_user_cost)+Math.max(0,newDeal.admin-newDeal.free_admin)*newDeal.admin_cost+(newDeal.dashboards*newDeal.dash_cost)
     const arr = total * 12
-    const spId = profile.role === 'admin' ? selectedSP?.id : profile.id
+    const spId = (profile.role === 'admin' || profile.role === 'manager') ? selectedSP?.id : profile.id
     const isLuke = spId === LUKE_ID
     const comm = isLuke ? total : arr * 0.08
     const p1 = isLuke ? total : comm / 2
     const p2 = isLuke ? 0 : comm / 2
     const p2_date = isLuke ? '' : getP2Month(newDeal.p1_date)
-    await supabase.from('deals').insert([{ ...newDeal, salesperson_id: spId, company, total, arr, comm, p1, p2, p2_date, p1_paid:false, p2_paid:false }])
+    await supabase.from('deals').insert([{ ...newDeal, salesperson_id: spId, company, total, arr, comm, p1, p2, p2_date, p1_paid:false, p2_paid:false, approved_luke:false, approved_bernard:false, approved_romaine:false }])
     setShowAdd(false); setNewDeal(BLANK_DEAL)
     loadDeals(spId)
   }
@@ -204,7 +202,7 @@ export default function App() {
   const deleteDeal = async (id) => {
     if (!window.confirm('Are you sure you want to delete this deal?')) return
     await supabase.from('deals').delete().eq('id', id)
-    loadDeals(selectedSP?.id || profile.id)
+    setDeals(prev => prev.filter(d => d.id !== id))
   }
 
   const saveEditedDeal = async () => {
@@ -223,21 +221,22 @@ export default function App() {
   const addReferral = async () => {
     if (!newReferral.referred_by || !newReferral.client || !newReferral.mrr) return
     const bonus = getReferralBonus(newReferral.mrr)
-    const spId = profile.role === 'admin' ? selectedSP?.id : profile.id
-    await supabase.from('referrals').insert([{ ...newReferral, salesperson_id: spId, company, bonus, paid: false }])
+    const spId = (profile.role === 'admin' || profile.role === 'manager') ? selectedSP?.id : profile.id
+    await supabase.from('referrals').insert([{ ...newReferral, salesperson_id: spId, company, bonus, paid: false, approved_luke:false, approved_bernard:false, approved_romaine:false }])
     setShowAddReferral(false); setNewReferral(BLANK_REFERRAL)
     loadReferrals(spId)
   }
 
   const toggleReferralPaid = async (r) => {
-    await supabase.from('referrals').update({ paid: !r.paid }).eq('id', r.id)
-    loadReferrals(selectedSP?.id || profile.id)
+    const updates = { paid: !r.paid }
+    await supabase.from('referrals').update(updates).eq('id', r.id)
+    setReferrals(prev => prev.map(x => x.id === r.id ? { ...x, ...updates } : x))
   }
 
   const deleteReferral = async (id) => {
     if (!window.confirm('Delete this referral?')) return
     await supabase.from('referrals').delete().eq('id', id)
-    loadReferrals(selectedSP?.id || profile.id)
+    setReferrals(prev => prev.filter(r => r.id !== id))
   }
 
   const signOut = () => supabase.auth.signOut()
@@ -245,7 +244,7 @@ export default function App() {
   if (!session) return <Login />
   if (loading) return <div style={{ padding:40, textAlign:'center', color:'#64748b', fontFamily:"'Segoe UI',sans-serif" }}>Loading...</div>
 
-  const isAdmin = profile?.role === 'admin'
+  const isAdmin = profile?.role === 'admin' || profile?.role === 'manager'
   const isLukeView = selectedSP?.id === LUKE_ID || (!isAdmin && profile?.id === LUKE_ID)
   const accentColor = selectedSP?.color || profile?.color || COMPANY_COLORS[company]
   const displayName = isAdmin ? selectedSP?.name : profile?.name
@@ -261,6 +260,26 @@ export default function App() {
   const td = { padding:'10px 14px', fontSize:13, color:'#1e293b', borderBottom:'1px solid #f1f5f9', verticalAlign:'middle' }
   const tabBtn = (t) => ({ padding:'8px 20px', borderRadius:8, border:'none', cursor:'pointer', fontWeight:600, fontSize:13, background:tab===t?accentColor:'#e2e8f0', color:tab===t?'#fff':'#475569' })
   const actionBtn = (color, bg) => ({ padding:'5px 12px', fontSize:11, borderRadius:6, border:'none', cursor:'pointer', fontWeight:700, background:bg, color, whiteSpace:'nowrap' })
+
+  const ApprovalCell = ({ item, table, setter }) => (
+    <div style={{ display:'flex', gap:4, flexWrap:'wrap' }}>
+      {APPROVERS.map(a => {
+        const approved = item[a.key]
+        const canToggle = profile?.id === a.id
+        return (
+          <button key={a.id} onClick={canToggle ? () => toggleApproval(item.id, a.key, table, setter) : undefined}
+            title={canToggle ? `Click to ${approved?'unapprove':'approve'}` : `${a.name}: ${approved?'Approved':'Pending'}`}
+            style={{ padding:'3px 8px', borderRadius:12, fontSize:11, fontWeight:700, border:'none',
+              cursor: canToggle ? 'pointer' : 'default',
+              background: approved ? '#d1fae5' : '#f1f5f9',
+              color: approved ? '#065f46' : '#94a3b8',
+            }}>
+            {approved ? '✅' : '⬜'} {a.name}
+          </button>
+        )
+      })}
+    </div>
+  )
 
   const EditModal = () => {
     if (!editingDeal) return null
@@ -322,7 +341,7 @@ export default function App() {
   return (
     <div style={css}>
       <EditModal />
-      <div style={{ maxWidth:1200, margin:'0 auto' }}>
+      <div style={{ maxWidth:1400, margin:'0 auto' }}>
 
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
           <div>
@@ -332,8 +351,8 @@ export default function App() {
             <p style={{ margin:'4px 0 0', color:'#64748b', fontSize:13 }}>FY 2025 / 2026 · {isAdmin ? '👑 Admin' : `👤 ${profile?.name}`}</p>
           </div>
           <div style={{ display:'flex', gap:10, alignItems:'center' }}>
-            <button onClick={()=>setShowAdd(!showAdd)} style={{ padding:'8px 16px', background:accentColor, color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer', fontSize:13 }}>+ Add Deal</button>
-            <button onClick={()=>exportToExcel(deals, referrals, displayName || 'Export', isLukeView)} style={{ padding:'8px 16px', background:'#10b981', color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer', fontSize:13 }}>⬇ Export</button>
+            {isAdmin && <button onClick={()=>setShowAdd(!showAdd)} style={{ padding:'8px 16px', background:accentColor, color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer', fontSize:13 }}>+ Add Deal</button>}
+            <button onClick={()=>exportToExcel(deals, referrals, displayName||'Export', isLukeView)} style={{ padding:'8px 16px', background:'#10b981', color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer', fontSize:13 }}>⬇ Export</button>
             <button onClick={signOut} style={{ padding:'8px 14px', background:'#e2e8f0', border:'none', borderRadius:8, fontWeight:600, cursor:'pointer', fontSize:13, color:'#475569' }}>Sign Out</button>
           </div>
         </div>
@@ -350,7 +369,7 @@ export default function App() {
           </div>
         )}
 
-        {isAdmin && (
+        {isAdmin && profiles.length > 0 && (
           <div style={{ display:'flex', gap:8, marginBottom:20, flexWrap:'wrap' }}>
             {profiles.map(sp=>(
               <button key={sp.id} onClick={()=>setSelectedSP(sp)} style={{ padding:'7px 20px', borderRadius:20, border:`2px solid ${sp.color}`, cursor:'pointer', fontWeight:700, fontSize:13, background:selectedSP?.id===sp.id?sp.color:'#fff', color:selectedSP?.id===sp.id?'#fff':sp.color }}>
@@ -362,7 +381,7 @@ export default function App() {
 
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:14, marginBottom:20 }}>
           {[
-            { label:`${displayName || '...'} — Total Commission`, value:fmt(totalComm), color:accentColor },
+            { label:`${displayName||'...'} — Total Commission`, value:fmt(totalComm), color:accentColor },
             { label:'Total Paid Out', value:fmt(totalPaid), color:'#10b981' },
             { label:'Outstanding', value:fmt(totalPending), color:'#f59e0b' },
           ].map(k=>(
@@ -373,7 +392,7 @@ export default function App() {
           ))}
         </div>
 
-        {showAdd && (
+        {showAdd && isAdmin && (
           <div style={{ ...card, border:`2px solid ${accentColor}` }}>
             <h3 style={{ margin:'0 0 14px', color:accentColor, fontSize:15 }}>New Deal — {displayName}</h3>
             <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10 }}>
@@ -411,9 +430,9 @@ export default function App() {
           {isAdmin && <button style={tabBtn('referrals')} onClick={()=>setTab('referrals')}>Referrals</button>}
         </div>
 
-        {deals.length===0 && tab !== 'referrals' && (
+        {deals.length===0 && tab!=='referrals' && (
           <div style={{ ...card, textAlign:'center', color:'#94a3b8', padding:40 }}>
-            No deals yet. Click <strong>+ Add Deal</strong> to get started.
+            No deals yet.{isAdmin && <> Click <strong>+ Add Deal</strong> to get started.</>}
           </div>
         )}
 
@@ -425,7 +444,8 @@ export default function App() {
                 <tr>
                   {['Client','Monthly Deal','× 12 (ARR)',commLabel,'Payout 1','P1 Date','P1 Status','1st Payment',
                     ...(isAdmin?['']:[]),
-                    ...(!isLukeView?['Payout 2','P2 Date','P2 Status',...(isAdmin?['']:[])]:[])
+                    ...(!isLukeView?['Payout 2','P2 Date','P2 Status',...(isAdmin?['']:[])]:[]),
+                    'Approvals'
                   ].map((h,i)=>(
                     <th key={i} style={{ ...th, background:i>=8?'#ede9fe':'#f1f5f9' }}>{h}</th>
                   ))}
@@ -443,18 +463,14 @@ export default function App() {
                     <td style={td}><Badge paid={d.p1_paid} /></td>
                     <td style={td}>
                       {isAdmin ? (
-                        <select value={d.first_payment_received || 'TBC'} onChange={e=>updatePaymentStatus(d.id, e.target.value)}
+                        <select value={d.first_payment_received||'TBC'} onChange={e=>updatePaymentStatus(d.id,e.target.value)}
                           style={{ padding:'4px 8px', borderRadius:6, border:'1px solid #cbd5e1', fontSize:12, fontWeight:700, cursor:'pointer',
-                            background: d.first_payment_received==='Yes'?'#d1fae5': d.first_payment_received==='No'?'#fee2e2':'#fef3c7',
-                            color: d.first_payment_received==='Yes'?'#065f46': d.first_payment_received==='No'?'#991b1b':'#92400e'
+                            background:d.first_payment_received==='Yes'?'#d1fae5':d.first_payment_received==='No'?'#fee2e2':'#fef3c7',
+                            color:d.first_payment_received==='Yes'?'#065f46':d.first_payment_received==='No'?'#991b1b':'#92400e'
                           }}>
-                          <option>TBC</option>
-                          <option>Yes</option>
-                          <option>No</option>
+                          <option>TBC</option><option>Yes</option><option>No</option>
                         </select>
-                      ) : (
-                        <PaymentBadge val={d.first_payment_received} />
-                      )}
+                      ) : <PaymentBadge val={d.first_payment_received} />}
                     </td>
                     {isAdmin && <td style={td}><button onClick={()=>toggleP1(d)} style={actionBtn(d.p1_paid?'#991b1b':'#065f46',d.p1_paid?'#fee2e2':'#d1fae5')}>{d.p1_paid?'↩ Unpaid':'✓ Mark Paid'}</button></td>}
                     {!isLukeView && <>
@@ -467,6 +483,7 @@ export default function App() {
                           : <span style={{ fontSize:11, color:'#94a3b8' }}>Locked</span>}
                       </td>}
                     </>}
+                    <td style={td}><ApprovalCell item={d} table='deals' setter={setDeals} /></td>
                   </tr>
                 ))}
               </tbody>
@@ -479,6 +496,7 @@ export default function App() {
                   <td style={{ ...td, fontWeight:700 }}>{fmt(deals.reduce((s,d)=>s+d.p1,0))}</td>
                   <td style={td}></td>
                   <td style={{ ...td, fontSize:12, color:'#10b981', fontWeight:700 }}>{fmt(deals.reduce((s,d)=>s+(d.p1_paid?d.p1:0),0))} paid</td>
+                  <td style={td}></td>
                   {isAdmin && <td style={td}></td>}
                   {!isLukeView && <>
                     <td style={{ ...td, fontWeight:700, background:'#faf5ff' }}>{fmt(deals.reduce((s,d)=>s+d.p2,0))}</td>
@@ -486,6 +504,7 @@ export default function App() {
                     <td style={{ ...td, fontSize:12, color:'#10b981', fontWeight:700, background:'#faf5ff' }}>{fmt(deals.reduce((s,d)=>s+(d.p2_paid?d.p2:0),0))} paid</td>
                     {isAdmin && <td style={{ background:'#faf5ff' }}></td>}
                   </>}
+                  <td style={td}></td>
                 </tr>
               </tfoot>
             </table>
@@ -516,18 +535,14 @@ export default function App() {
                     <td style={td}>{d.billing_date}</td>
                     <td style={td}>
                       {isAdmin ? (
-                        <select value={d.first_payment_received || 'TBC'} onChange={e=>updatePaymentStatus(d.id, e.target.value)}
+                        <select value={d.first_payment_received||'TBC'} onChange={e=>updatePaymentStatus(d.id,e.target.value)}
                           style={{ padding:'4px 8px', borderRadius:6, border:'1px solid #cbd5e1', fontSize:12, fontWeight:700, cursor:'pointer',
-                            background: d.first_payment_received==='Yes'?'#d1fae5': d.first_payment_received==='No'?'#fee2e2':'#fef3c7',
-                            color: d.first_payment_received==='Yes'?'#065f46': d.first_payment_received==='No'?'#991b1b':'#92400e'
+                            background:d.first_payment_received==='Yes'?'#d1fae5':d.first_payment_received==='No'?'#fee2e2':'#fef3c7',
+                            color:d.first_payment_received==='Yes'?'#065f46':d.first_payment_received==='No'?'#991b1b':'#92400e'
                           }}>
-                          <option>TBC</option>
-                          <option>Yes</option>
-                          <option>No</option>
+                          <option>TBC</option><option>Yes</option><option>No</option>
                         </select>
-                      ) : (
-                        <PaymentBadge val={d.first_payment_received} />
-                      )}
+                      ) : <PaymentBadge val={d.first_payment_received} />}
                     </td>
                     <td style={{ ...td, color:'#64748b', fontSize:12 }}>{d.notes}</td>
                     {isAdmin && <td style={td}>
@@ -549,7 +564,6 @@ export default function App() {
               <div style={{ fontSize:12, color:'#64748b' }}>25% of monthly contract value — paid after 2nd invoice settled</div>
               <button onClick={()=>setShowAddReferral(!showAddReferral)} style={{ padding:'7px 16px', background:accentColor, color:'#fff', border:'none', borderRadius:8, fontWeight:700, cursor:'pointer', fontSize:13 }}>+ Add Referral</button>
             </div>
-
             {showAddReferral && (
               <div style={{ ...card, border:`2px solid ${accentColor}`, marginBottom:16 }}>
                 <h3 style={{ margin:'0 0 14px', color:accentColor, fontSize:15 }}>New Referral</h3>
@@ -573,16 +587,14 @@ export default function App() {
                 </div>
               </div>
             )}
-
             {referrals.length === 0 && !showAddReferral && (
               <div style={{ ...card, textAlign:'center', color:'#94a3b8', padding:40 }}>No referrals yet. Click <strong>+ Add Referral</strong> to get started.</div>
             )}
-
             {referrals.length > 0 && (
               <div style={{ overflowX:'auto' }}>
                 <table style={{ width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 1px 4px #0001' }}>
                   <thead>
-                    <tr>{['Referred By','Client','Monthly Fee','25% Bonus','Date','Status','Action',''].map((h,i)=>(
+                    <tr>{['Referred By','Client','Monthly Fee','25% Bonus','Date','Status','Approvals','Action',''].map((h,i)=>(
                       <th key={i} style={th}>{h}</th>
                     ))}</tr>
                   </thead>
@@ -595,6 +607,7 @@ export default function App() {
                         <td style={{ ...td, color:accentColor, fontWeight:700 }}>{fmt(r.bonus)}</td>
                         <td style={td}>{r.date}</td>
                         <td style={td}><Badge paid={r.paid} /></td>
+                        <td style={td}><ApprovalCell item={r} table='referrals' setter={setReferrals} /></td>
                         <td style={td}>
                           <button onClick={()=>toggleReferralPaid(r)} style={{ padding:'5px 12px', fontSize:11, borderRadius:6, border:'none', cursor:'pointer', fontWeight:700, background:r.paid?'#fee2e2':'#d1fae5', color:r.paid?'#991b1b':'#065f46' }}>
                             {r.paid ? '↩ Unpaid' : '✓ Mark Paid'}
@@ -613,7 +626,7 @@ export default function App() {
                       <td style={{ ...td, fontWeight:800, color:accentColor }}>{fmt(referrals.reduce((s,r)=>s+r.bonus,0))}</td>
                       <td style={td}></td>
                       <td style={{ ...td, fontSize:12, color:'#10b981', fontWeight:700 }}>{fmt(referrals.reduce((s,r)=>s+(r.paid?r.bonus:0),0))} paid</td>
-                      <td style={td}></td><td style={td}></td>
+                      <td style={td}></td><td style={td}></td><td style={td}></td>
                     </tr>
                   </tfoot>
                 </table>
@@ -621,7 +634,6 @@ export default function App() {
             )}
           </div>
         )}
-
       </div>
     </div>
   )
