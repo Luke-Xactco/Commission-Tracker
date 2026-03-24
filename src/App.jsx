@@ -442,9 +442,9 @@ export default function App() {
             <table style={{ width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 1px 4px #0001' }}>
               <thead>
                 <tr>
-                  {['Client','Monthly Deal','× 12 (ARR)',commLabel,'Payout 1','P1 Date','P1 Status','1st Payment',
-                    ...(isAdmin?['']:[]),
-                    ...(!isLukeView?['Payout 2','P2 Date','P2 Status',...(isAdmin?['']:[])]:[]),
+                  {['Client','Monthly Deal','× 12 (ARR)',commLabel,'Payout 1','Comm. Pay Date','P1 Status','Client 1st Payment',
+                    ...(isAdmin?['Finance Action']:[]),
+                    ...(!isLukeView?['Payout 2','P2 Date','P2 Status',...(isAdmin?['Finance Action']:[])]:[]),
                     'Approvals'
                   ].map((h,i)=>(
                     <th key={i} style={{ ...th, background:i>=8?'#ede9fe':'#f1f5f9' }}>{h}</th>
@@ -515,7 +515,7 @@ export default function App() {
           <div style={{ overflowX:'auto' }}>
             <table style={{ width:'100%', borderCollapse:'collapse', background:'#fff', borderRadius:12, overflow:'hidden', boxShadow:'0 1px 4px #0001' }}>
               <thead>
-                <tr>{['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR',commLabel,'Billing Date','1st Payment','Notes',...(isAdmin?['Actions']:[])].map(h=>(
+                <tr>{['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR',commLabel,'Billing Date','Client 1st Payment','Notes',...(isAdmin?['Actions']:[])].map(h=>(
                   <th key={h} style={th}>{h}</th>
                 ))}</tr>
               </thead>
