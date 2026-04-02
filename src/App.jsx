@@ -291,6 +291,7 @@ export default function App() {
                   <td style={{ ...td,fontWeight:700 }}>{d.client}{d.cancelled&&<span style={{ marginLeft:6,padding:'1px 6px',borderRadius:4,fontSize:10,background:'#fee2e2',color:'#991b1b' }}>Cancelled</span>}</td>
                   <td style={td}>{d.month}</td>
                   <td style={{ ...td,fontWeight:700,color:'#0ea5e9' }}>{fmt(lic)}</td>
+                  <td style={{ ...td,color:'#475569' }}>{fmt(lic*12)}</td>
                   <td style={{ ...td,color,fontWeight:700 }}>{fmt(comm)}</td>
                   <td style={td}>{fmt(d.p1)}</td>
                   <td style={td}><DateCell deal={d} which='p1_date' disabled={false} /></td>
@@ -313,6 +314,7 @@ export default function App() {
                 <td style={{ ...td,fontWeight:800 }}>TOTALS</td>
                 <td style={td}></td>
                 <td style={{ ...td,fontWeight:800,color:'#0ea5e9' }}>{fmt(sectionDeals.reduce((s,d)=>s+calcBHTotalLic(d),0))}</td>
+                <td style={{ ...td,fontWeight:800,color:'#475569' }}>{fmt(sectionDeals.reduce((s,d)=>s+calcBHTotalLic(d)*12,0))}</td>
                 <td style={{ ...td,fontWeight:800,color }}>{fmt(sectionComm)}</td>
                 <td style={{ ...td,fontWeight:700 }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p1||0),0))}</td>
                 <td style={td}></td>
