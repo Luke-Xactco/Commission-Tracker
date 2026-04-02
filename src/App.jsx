@@ -15,6 +15,7 @@ const APPROVERS = [
 ]
 const getReferralBonus = (mrr) => Math.round(mrr * 0.25)
 const calcBHTotalLic = (d) => (d.patrol_qty||0)*(d.patrol_rate||0)+(d.inspect_qty||0)*(d.inspect_rate||0)+(d.vm_qty||0)*(d.vm_rate||0)+(d.ilog_qty||0)*(d.ilog_rate||0)
+const calcBHComm = (total, dealType) => dealType === 'upsell' ? Math.round(total*12*0.04) : Math.round(total*12*0.08)
 const isExistingClient = (inceptionDate, dealMonth) => {
   if (!inceptionDate || !dealMonth) return false
   const ii = MONTHS.indexOf(inceptionDate), di = MONTHS.indexOf(dealMonth)
@@ -91,6 +92,16 @@ function Login() {
   )
 }
 
+const CancelCell = ({ deal, isAdmin, accentColor, onUpdate }) => {
+  const [open,setOpen]=useState(false)
+  const [date,setDate]=useState(deal.cancellation_date||'')
+  const [months,setMonths]=useState(deal.active_months||'')
+  if(deal.cancelled)return(<div><span style={{ padding:'2px 8px',borderRadius:10,fontSize:11,fontWeight:700,background:'#fee2e2',color:'#991b1b' }}>Cancelled</span><div style={{ fontSize:10,color:'#64748b',marginTop:2 }}>{deal.cancellation_date} · {deal.active_months}m</div><div style={{ fontSize:10,color:'#ef4444',fontWeight:700 }}>Revised: R {Number(deal.recalculated_comm||0).toLocaleString('en-ZA')}</div>{isAdmin&&<button onClick={()=>onUpdate(deal.id,false,'',0)} style={{ marginTop:4,padding:'2px 8px',fontSize:10,borderRadius:6,border:'none',cursor:'pointer',background:'#e2e8f0',color:'#475569' }}>↩ Undo</button>}</div>)
+  if(!isAdmin)return <span style={{ color:'#94a3b8',fontSize:11 }}>—</span>
+  if(open)return(<div style={{ display:'flex',flexDirection:'column',gap:4,minWidth:150 }}><input placeholder="Cancel date e.g. Mar-26" value={date} onChange={e=>setDate(e.target.value)} style={{ padding:'3px 6px',borderRadius:5,border:'1px solid #cbd5e1',fontSize:11 }} /><input type="number" placeholder="Active months" value={months} onChange={e=>setMonths(e.target.value)} style={{ padding:'3px 6px',borderRadius:5,border:'1px solid #cbd5e1',fontSize:11 }} /><div style={{ display:'flex',gap:4 }}><button onClick={()=>{onUpdate(deal.id,true,date,parseInt(months)||0);setOpen(false)}} style={{ padding:'3px 8px',fontSize:11,borderRadius:5,border:'none',cursor:'pointer',background:'#ef4444',color:'#fff',fontWeight:700 }}>Save</button><button onClick={()=>setOpen(false)} style={{ padding:'3px 8px',fontSize:11,borderRadius:5,border:'none',cursor:'pointer',background:'#e2e8f0',color:'#475569' }}>✕</button></div></div>)
+  return <button onClick={()=>setOpen(true)} style={{ padding:'4px 10px',fontSize:11,borderRadius:6,border:'none',cursor:'pointer',fontWeight:700,background:'#fee2e2',color:'#991b1b' }}>Mark Cancelled</button>
+}
+
 export default function App() {
   const [session,setSession]=useState(null);const [profile,setProfile]=useState(null);const [deals,setDeals]=useState([]);const [profiles,setProfiles]=useState([]);const [referrals,setReferrals]=useState([]);const [company,setCompany]=useState('xactco');const [selectedSP,setSelectedSP]=useState(null);const [tab,setTab]=useState('summary');const [showAdd,setShowAdd]=useState(false);const [showAddReferral,setShowAddReferral]=useState(false);const [newDeal,setNewDeal]=useState(BLANK_XACTCO_DEAL);const [newReferral,setNewReferral]=useState(BLANK_REFERRAL);const [editingDate,setEditingDate]=useState(null);const [editingDeal,setEditingDeal]=useState(null);const [loading,setLoading]=useState(true)
   const isBH = company==='bloodhound'
@@ -112,11 +123,14 @@ export default function App() {
   const toggleApproval = async (id,key,table,setter) => { const item=table==='deals'?deals.find(d=>d.id===id):referrals.find(r=>r.id===id);const updates={[key]:!item[key]};await supabase.from(table).update(updates).eq('id',id);setter(prev=>prev.map(x=>x.id===id?{...x,...updates}:x)) }
 
   const updateDealType = async (id, dealType) => {
-    const deal=deals.find(d=>d.id===id); const lic=calcBHTotalLic(deal); const isUpsell=dealType==='upsell'
-    const comm=isUpsell?Math.round(lic*0.04):Math.round(lic*12*0.08)
-    const p1=isUpsell?comm:Math.round(comm/2); const p2=isUpsell?0:Math.round(comm/2)
+    const deal=deals.find(d=>d.id===id)
+    const lic=calcBHTotalLic(deal)
+    const comm=calcBHComm(lic,dealType)
+    const isUpsell=dealType==='upsell'
+    const p1=isUpsell?comm:Math.round(comm/2)
+    const p2=isUpsell?0:Math.round(comm/2)
     const p2_date=isUpsell?'':getP2Month(deal.p1_date)
-    const updates={deal_type:dealType,comm,p1,p2,p2_date,p2_voided:isUpsell}
+    const updates={deal_type:dealType,arr:lic*12,comm,p1,p2,p2_date,p2_voided:isUpsell}
     await supabase.from('deals').update(updates).eq('id',id)
     setDeals(prev=>prev.map(d=>d.id===id?{...d,...updates}:d))
   }
@@ -137,12 +151,12 @@ export default function App() {
     if(isBH){
       total=calcBHTotalLic(newDeal)
       const existing=isExistingClient(newDeal.inception_date,newDeal.month)
-      deal_type=newDeal.deal_type||( existing?'upsell':'new')
-      const isUpsell=deal_type==='upsell'
-      arr=isUpsell?total:total*12
-      comm=isUpsell?Math.round(total*0.04):Math.round(total*12*0.08)
-      p1=isUpsell?comm:Math.round(comm/2); p2=isUpsell?0:Math.round(comm/2)
-      p2_date=isUpsell?'':getP2Month(newDeal.p1_date)
+      deal_type=newDeal.deal_type||(existing?'upsell':'new')
+      arr=total*12
+      comm=calcBHComm(total,deal_type)
+      p1=deal_type==='upsell'?comm:Math.round(comm/2)
+      p2=deal_type==='upsell'?0:Math.round(comm/2)
+      p2_date=deal_type==='upsell'?'':getP2Month(newDeal.p1_date)
     } else {
       total=(newDeal.app_users*newDeal.a_user_cost)+(newDeal.lite_users*(newDeal.l_user_cost||0))+Math.max(0,newDeal.admin-newDeal.free_admin)*newDeal.admin_cost+(newDeal.dashboards*newDeal.dash_cost)
       arr=total*12;const isLuke=spId===LUKE_ID;comm=isLuke?total:arr*0.08;p1=isLuke?total:comm/2;p2=isLuke?0:comm/2;p2_date=isLuke?'':getP2Month(newDeal.p1_date)
@@ -195,13 +209,9 @@ export default function App() {
   const tabBtn=(t)=>({padding:'8px 20px',borderRadius:8,border:'none',cursor:'pointer',fontWeight:600,fontSize:13,background:tab===t?accentColor:'#e2e8f0',color:tab===t?'#fff':'#475569'})
   const actionBtn=(color,bg)=>({padding:'4px 10px',fontSize:11,borderRadius:6,border:'none',cursor:'pointer',fontWeight:700,background:bg,color,whiteSpace:'nowrap'})
 
-  const CancelCell = ({ deal }) => {
-    const [open,setOpen]=useState(false);const [date,setDate]=useState(deal.cancellation_date||'');const [months,setMonths]=useState(deal.active_months||'')
-    if(deal.cancelled)return(<div><span style={{ padding:'2px 8px',borderRadius:10,fontSize:11,fontWeight:700,background:'#fee2e2',color:'#991b1b' }}>Cancelled</span><div style={{ fontSize:10,color:'#64748b',marginTop:2 }}>{deal.cancellation_date} · {deal.active_months}m</div><div style={{ fontSize:10,color:'#ef4444',fontWeight:700 }}>Revised: {fmt(deal.recalculated_comm)}</div>{isAdmin&&<button onClick={()=>updateCancellation(deal.id,false,'',0)} style={{ marginTop:4,padding:'2px 8px',fontSize:10,borderRadius:6,border:'none',cursor:'pointer',background:'#e2e8f0',color:'#475569' }}>↩ Undo</button>}</div>)
-    if(!isAdmin)return <span style={{ color:'#94a3b8',fontSize:11 }}>—</span>
-    if(open)return(<div style={{ display:'flex',flexDirection:'column',gap:4,minWidth:150 }}><input placeholder="Cancel date e.g. Mar-26" value={date} onChange={e=>setDate(e.target.value)} style={{ padding:'3px 6px',borderRadius:5,border:'1px solid #cbd5e1',fontSize:11 }} /><input type="number" placeholder="Active months" value={months} onChange={e=>setMonths(e.target.value)} style={{ padding:'3px 6px',borderRadius:5,border:'1px solid #cbd5e1',fontSize:11 }} /><div style={{ display:'flex',gap:4 }}><button onClick={()=>{updateCancellation(deal.id,true,date,parseInt(months)||0);setOpen(false)}} style={{ padding:'3px 8px',fontSize:11,borderRadius:5,border:'none',cursor:'pointer',background:'#ef4444',color:'#fff',fontWeight:700 }}>Save</button><button onClick={()=>setOpen(false)} style={{ padding:'3px 8px',fontSize:11,borderRadius:5,border:'none',cursor:'pointer',background:'#e2e8f0',color:'#475569' }}>✕</button></div></div>)
-    return <button onClick={()=>setOpen(true)} style={{ padding:'4px 10px',fontSize:11,borderRadius:6,border:'none',cursor:'pointer',fontWeight:700,background:'#fee2e2',color:'#991b1b' }}>Mark Cancelled</button>
-  }
+  const cancelProps = { isAdmin, accentColor, onUpdate: updateCancellation }
+
+  const CancelCellInner = ({ deal }) => <CancelCell deal={deal} {...cancelProps} />
 
   const ApprovalCell = ({ item,table,setter }) => (
     <div style={{ display:'flex',gap:4,flexWrap:'wrap' }}>
@@ -293,7 +303,7 @@ export default function App() {
                     <td style={{ ...td,background:'#faf5ff' }}><Badge paid={d.p2_paid} voided={d.p2_voided} /></td>
                     {isAdmin&&<td style={{ ...td,background:'#faf5ff' }}>{d.p2_voided?<span style={{ fontSize:11,color:'#ef4444',fontWeight:700 }}>Voided</span>:d.p1_paid?<button onClick={()=>toggleP2(d)} style={actionBtn(d.p2_paid?'#991b1b':'#065f46',d.p2_paid?'#fee2e2':'#d1fae5')}>{d.p2_paid?'↩ Unpaid':'✓ Mark Paid'}</button>:<span style={{ fontSize:11,color:'#94a3b8' }}>Locked</span>}</td>}
                   </>}
-                  <td style={td}><CancelCell deal={d} /></td>
+                  <td style={td}><CancelCellInner deal={d} /></td>
                   <td style={td}><ApprovalCell item={d} table='deals' setter={setDeals} /></td>
                 </tr>)
               })}
@@ -409,7 +419,7 @@ export default function App() {
                         <td style={{ ...td,background:'#faf5ff' }}><Badge paid={d.p2_paid} voided={d.p2_voided} /></td>
                         {isAdmin&&<td style={{ ...td,background:'#faf5ff' }}>{d.p2_voided?<span style={{ fontSize:11,color:'#ef4444',fontWeight:700 }}>Voided</span>:d.p1_paid?<button onClick={()=>toggleP2(d)} style={actionBtn(d.p2_paid?'#991b1b':'#065f46',d.p2_paid?'#fee2e2':'#d1fae5')}>{d.p2_paid?'↩ Unpaid':'✓ Mark Paid'}</button>:<span style={{ fontSize:11,color:'#94a3b8' }}>Locked</span>}</td>}
                       </>}
-                      <td style={td}><CancelCell deal={d} /></td>
+                      <td style={td}><CancelCellInner deal={d} /></td>
                       <td style={td}><ApprovalCell item={d} table='deals' setter={setDeals} /></td>
                     </tr>)
                   })}
@@ -476,7 +486,7 @@ export default function App() {
                     <td style={td}>{d.billing_date}</td>
                     <td style={td}><PaymentSelect deal={d} /></td>
                     <td style={{ ...td,color:'#64748b',fontSize:11 }}>{d.notes}</td>
-                    <td style={td}><CancelCell deal={d} /></td>
+                    <td style={td}><CancelCellInner deal={d} /></td>
                     {isAdmin&&<td style={td}><div style={{ display:'flex',gap:4 }}><button onClick={()=>setEditingDeal(d)} style={actionBtn('#1e293b','#e2e8f0')}>✏️ Edit</button><button onClick={()=>deleteDeal(d.id)} style={actionBtn('#991b1b','#fee2e2')}>🗑</button></div></td>}
                   </>}
                 </tr>))}
