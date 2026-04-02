@@ -311,23 +311,28 @@ export default function App() {
             </tbody>
             <tfoot>
               <tr style={{ background:'#f8fafc' }}>
-                <td style={{ ...td,fontWeight:800 }}>TOTALS</td>
-                <td style={td}></td>
+                <td style={{ ...td,fontWeight:800 }} colSpan={2}>TOTALS</td>
                 <td style={{ ...td,fontWeight:800,color:'#0ea5e9' }}>{fmt(sectionDeals.reduce((s,d)=>s+calcBHTotalLic(d),0))}</td>
                 <td style={{ ...td,fontWeight:800,color:'#475569' }}>{fmt(sectionDeals.reduce((s,d)=>s+calcBHTotalLic(d)*12,0))}</td>
                 <td style={{ ...td,fontWeight:800,color }}>{fmt(sectionComm)}</td>
-                <td style={{ ...td,fontWeight:700 }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p1||0),0))}</td>
-                <td style={td}></td>
-                <td style={{ ...td,fontSize:11,color:'#10b981',fontWeight:700 }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p1_paid?d.p1:0),0))} paid</td>
-                <td style={td}></td>
-                {isAdmin&&<td style={td}></td>}
-                {!isUpsell&&<>
+                {isUpsell ? <>
+                  <td style={td}></td>
+                  <td style={{ ...td,fontSize:11,color:'#10b981',fontWeight:700 }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p1_paid?d.p1:0),0))} paid</td>
+                  <td style={td}></td>
+                  {isAdmin&&<td style={td}></td>}
+                  <td style={td}></td><td style={td}></td>
+                </> : <>
+                  <td style={{ ...td,fontWeight:700 }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p1||0),0))}</td>
+                  <td style={td}></td>
+                  <td style={{ ...td,fontSize:11,color:'#10b981',fontWeight:700 }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p1_paid?d.p1:0),0))} paid</td>
+                  <td style={td}></td>
+                  {isAdmin&&<td style={td}></td>}
                   <td style={{ ...td,fontWeight:700,background:'#faf5ff' }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p2||0),0))}</td>
                   <td style={{ background:'#faf5ff' }}></td>
                   <td style={{ ...td,fontSize:11,color:'#10b981',fontWeight:700,background:'#faf5ff' }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p2_paid?d.p2:0),0))} paid</td>
                   {isAdmin&&<td style={{ background:'#faf5ff' }}></td>}
+                  <td style={td}></td><td style={td}></td>
                 </>}
-                <td style={td}></td><td style={td}></td>
               </tr>
             </tfoot>
           </table>
