@@ -191,6 +191,7 @@ export default function App() {
   const td={padding:'9px 12px',fontSize:12,color:'#1e293b',borderBottom:'1px solid #f1f5f9',verticalAlign:'middle'}
   const tBtn=(t)=>({padding:'8px 20px',borderRadius:8,border:'none',cursor:'pointer',fontWeight:600,fontSize:13,background:tab===t?accent:'#e2e8f0',color:tab===t?'#fff':'#475569'})
   const aBtn=(c,bg)=>({padding:'4px 10px',fontSize:11,borderRadius:6,border:'none',cursor:'pointer',fontWeight:700,background:bg,color:c,whiteSpace:'nowrap'})
+  const p2Bg='rgba(99,102,241,0.04)'
 
   const PaySel = ({ deal }) => (
     isAdmin ? <select value={deal.first_payment_received||'TBC'} onChange={e=>updPay(deal.id,e.target.value)} style={{ padding:'3px 7px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:11,fontWeight:700,cursor:'pointer',background:deal.first_payment_received==='Yes'?'#d1fae5':deal.first_payment_received==='No'?'#fee2e2':'#fef3c7',color:deal.first_payment_received==='Yes'?'#065f46':deal.first_payment_received==='No'?'#991b1b':'#92400e' }}><option>TBC</option><option>Yes</option><option>No</option></select>
@@ -241,7 +242,17 @@ export default function App() {
     const bdCol=isU?'rgba(245,158,11,0.25)':'rgba(14,165,233,0.25)'
     const txtCol=isU?'#92400e':'#0369a1'
     const sComm=sDeals.reduce((s,d)=>s+(d.cancelled?d.recalculated_comm||0:d.comm||0),0)
-    const sPaid=sDeals.reduce((s,d)=>s+(d.p1_paid?d.p1:0)+(d.p2_paid&&!isU?d.p2:0),0)
+    const sPaid=sDeals.reduce((s,d)=>s+(d.p1_paid?d.p1:0)+(!isU&&d.p2_paid?d.p2:0),0)
+
+    // NEW BUSINESS columns (matches Xactco / Image 1):
+    // Client | Month | Monthly Deal | ×12 ARR | 8% Comm | Payout 1 | Comm Pay Date | P1 Status | Client 1st Payment | Finance Action | Payout 2 | P2 Date | P2 Status | Finance Action | Cancellation | Approvals
+    //
+    // UPSELL columns:
+    // Client | Month | Monthly Deal | ×12 ARR | Commission | Payout | Comm Pay Date | P1 Status | Client 1st Payment | Finance Action | Cancellation | Approvals
+
+    const newHdrs=['Client','Month','Monthly Deal','× 12 (ARR)','8% Comm','Payout 1','Comm Pay Date','P1 Status','Client 1st Payment','Finance Action','Payout 2','P2 Date','P2 Status','Finance Action','Cancellation','Approvals']
+    const upHdrs=['Client','Month','Monthly Deal','× 12 (ARR)','Commission','Payout','Comm Pay Date','P1 Status','Client 1st Payment','Finance Action','Cancellation','Approvals']
+    const hdrs=isU?upHdrs:newHdrs
 
     return(
       <div style={{ marginBottom:24,borderRadius:10,overflow:'hidden',border:`0.5px solid ${bdCol}`,boxShadow:'0 1px 4px rgba(0,0,0,0.04)' }}>
@@ -257,11 +268,9 @@ export default function App() {
           <table style={{ width:'100%',borderCollapse:'collapse',background:'#fff' }}>
             <thead>
               <tr>
-                {isU ? (
-                  ['Client','Month','Monthly Deal','× 12 (ARR)','Total Comm','Payout','Comm Pay Date','Status','Client 1st Payment',...(isAdmin?['Finance Action']:[]),'Cancellation','Approvals'].map((h,i)=><th key={i} style={th}>{h}</th>)
-                ) : (
-                  ['Client','Month','Monthly Deal','× 12 (ARR)','Total Comm','Payout 1','Payout 2','Comm Pay Date','Status','Client 1st Payment',...(isAdmin?['Finance Action']:[]),'Cancellation','Approvals'].map((h,i)=><th key={i} style={{ ...th,background:i>=7?'#f1f5f9':th.background }}>{h}</th>)
-                )}
+                {hdrs.map((h,i)=>(
+                  <th key={i} style={{ ...th, background: !isU&&i>=10&&i<=13 ? 'rgba(99,102,241,0.07)' : th.background }}>{h}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
@@ -271,29 +280,81 @@ export default function App() {
                 const comm=d.cancelled?(d.recalculated_comm||0):d.comm
                 return(
                   <tr key={d.id} style={{ opacity:d.cancelled?0.75:1,background:d.cancelled?'#fff5f5':'#fff' }}>
-                    <td style={{ ...td,fontWeight:700 }}>{d.client}{d.cancelled&&<span style={{ marginLeft:6,padding:'1px 6px',borderRadius:4,fontSize:10,background:'#fee2e2',color:'#991b1b' }}>Cancelled</span>}</td>
+
+                    {/* Client */}
+                    <td style={{ ...td,fontWeight:700 }}>
+                      {d.client}
+                      {d.cancelled&&<span style={{ marginLeft:6,padding:'1px 6px',borderRadius:4,fontSize:10,background:'#fee2e2',color:'#991b1b' }}>Cancelled</span>}
+                    </td>
+
+                    {/* Month */}
                     <td style={td}>{d.month}</td>
+
+                    {/* Monthly Deal */}
                     <td style={{ ...td,fontWeight:700,color:'#0ea5e9' }}>{fmt(lic)}</td>
+
+                    {/* × 12 ARR */}
                     <td style={{ ...td,color:'#475569' }}>{fmt(arr)}</td>
+
+                    {/* 8% Comm / Commission */}
                     <td style={{ ...td,color,fontWeight:700 }}>{fmt(comm)}</td>
-                    {isU ? (
-                      <td style={td}>{fmt(d.p1)}</td>
-                    ) : (
-                      <><td style={td}>{fmt(d.p1)}</td><td style={{ ...td,background:'#faf5ff' }}>{fmt(d.p2)}</td></>
-                    )}
+
+                    {/* Payout 1 / Payout (upsell) */}
+                    <td style={td}>{fmt(d.p1)}</td>
+
+                    {/* Comm Pay Date */}
                     <td style={td}><DateCell deal={d} which='p1_date' disabled={false} /></td>
+
+                    {/* P1 Status */}
                     <td style={td}><Badge paid={d.p1_paid} /></td>
+
+                    {/* Client 1st Payment */}
                     <td style={td}><PaySel deal={d} /></td>
-                    {isAdmin&&(
-                      <td style={td}>
-                        <div style={{ display:'flex',flexDirection:'column',gap:4 }}>
-                          <button onClick={()=>toggleP1(d)} style={aBtn(d.p1_paid?'#991b1b':'#065f46',d.p1_paid?'#fee2e2':'#d1fae5')}>{d.p1_paid?'↩ P1 Unpaid':'✓ P1 Paid'}</button>
-                          {!isU&&(d.p2_voided?<span style={{ fontSize:10,color:'#ef4444',fontWeight:700 }}>P2 Voided</span>:d.p1_paid?<button onClick={()=>toggleP2(d)} style={aBtn(d.p2_paid?'#991b1b':'#065f46',d.p2_paid?'#fee2e2':'#d1fae5')}>{d.p2_paid?'↩ P2 Unpaid':'✓ P2 Paid'}</button>:<span style={{ fontSize:10,color:'#94a3b8' }}>P2 Locked</span>)}
-                        </div>
+
+                    {/* Finance Action — P1 */}
+                    <td style={td}>
+                      {isAdmin&&(
+                        <button onClick={()=>toggleP1(d)} style={aBtn(d.p1_paid?'#991b1b':'#065f46',d.p1_paid?'#fee2e2':'#d1fae5')}>
+                          {d.p1_paid?'↩ Unpaid':'✓ Mark Paid'}
+                        </button>
+                      )}
+                    </td>
+
+                    {/* NEW BUSINESS ONLY — P2 block */}
+                    {!isU&&<>
+                      {/* Payout 2 */}
+                      <td style={{ ...td,background:p2Bg }}>{fmt(d.p2)}</td>
+
+                      {/* P2 Date */}
+                      <td style={{ ...td,background:p2Bg }}>
+                        <DateCell deal={d} which='p2_date' disabled={!d.p1_paid} />
                       </td>
-                    )}
+
+                      {/* P2 Status */}
+                      <td style={{ ...td,background:p2Bg }}>
+                        <Badge paid={d.p2_paid} voided={d.p2_voided} />
+                      </td>
+
+                      {/* Finance Action — P2 */}
+                      <td style={{ ...td,background:p2Bg }}>
+                        {isAdmin&&(
+                          d.p2_voided
+                            ?<span style={{ fontSize:11,color:'#ef4444',fontWeight:700 }}>P2 Voided</span>
+                            :d.p1_paid
+                              ?<button onClick={()=>toggleP2(d)} style={aBtn(d.p2_paid?'#991b1b':'#065f46',d.p2_paid?'#fee2e2':'#d1fae5')}>
+                                  {d.p2_paid?'↩ Unpaid':'✓ Mark Paid'}
+                                </button>
+                              :<span style={{ fontSize:11,color:'#94a3b8' }}>Locked</span>
+                        )}
+                      </td>
+                    </>}
+
+                    {/* Cancellation */}
                     <td style={td}><CancelCell deal={d} isAdmin={isAdmin} onUpdate={updCancel} /></td>
+
+                    {/* Approvals */}
                     <td style={td}><ApprCell item={d} tbl='deals' setter={setDeals} /></td>
+
                   </tr>
                 )
               })}
@@ -305,12 +366,18 @@ export default function App() {
                 <td style={{ ...td,fontWeight:800,color:'#475569' }}>{fmt(sDeals.reduce((s,d)=>s+calcBHTotalLic(d)*12,0))}</td>
                 <td style={{ ...td,fontWeight:800,color }}>{fmt(sComm)}</td>
                 <td style={{ ...td,fontWeight:700 }}>{fmt(sDeals.reduce((s,d)=>s+(d.p1||0),0))}</td>
-                {!isU&&<td style={{ ...td,fontWeight:700,background:'#faf5ff' }}>{fmt(sDeals.reduce((s,d)=>s+(d.p2||0),0))}</td>}
                 <td style={td}></td>
-                <td style={{ ...td,fontSize:11,color:'#10b981',fontWeight:700 }}>{fmt(sPaid)} paid</td>
+                <td style={{ ...td,fontSize:11,color:'#10b981',fontWeight:700 }}>{fmt(sDeals.reduce((s,d)=>s+(d.p1_paid?d.p1:0),0))} paid</td>
                 <td style={td}></td>
-                {isAdmin&&<td style={td}></td>}
-                <td style={td}></td><td style={td}></td>
+                <td style={td}></td>
+                {!isU&&<>
+                  <td style={{ ...td,fontWeight:700,background:p2Bg }}>{fmt(sDeals.reduce((s,d)=>s+(d.p2||0),0))}</td>
+                  <td style={{ background:p2Bg }}></td>
+                  <td style={{ ...td,fontSize:11,color:'#10b981',fontWeight:700,background:p2Bg }}>{fmt(sDeals.reduce((s,d)=>s+(d.p2_paid?d.p2:0),0))} paid</td>
+                  <td style={{ background:p2Bg }}></td>
+                </>}
+                <td style={td}></td>
+                <td style={td}></td>
               </tr>
             </tfoot>
           </table>
