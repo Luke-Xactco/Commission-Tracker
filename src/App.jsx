@@ -262,17 +262,21 @@ export default function App() {
     const borderColor= isUpsell ? 'rgba(245,158,11,0.25)'  : 'rgba(239,68,68,0.25)'
     const textColor  = isUpsell ? '#92400e' : '#991b1b'
 
-    // Column headers — match Xactco layout exactly
+    // Tighter styles for BH table to fit all columns
+    const bth = { ...th, padding:'7px 8px', fontSize:11 }
+    const btd = { ...td, padding:'7px 8px', fontSize:11 }
+    const p2BG = { background:'#faf5ff' }
+
     const headers = [
       'Client', 'Month', 'Monthly Deal', '× 12 (ARR)',
       isUpsell ? 'Total Comm (4%)' : 'Total Comm (8%)',
       'Payout 1',
-      ...(!isUpsell ? ['Payout 2'] : []),
       'Comm Pay Date',
       isUpsell ? 'Status' : 'P1 Status',
       'Client 1st Payment',
       ...(isAdmin ? ['Finance Action'] : []),
       ...(!isUpsell ? [
+        'Payout 2',
         'P2 Date',
         'P2 Status',
         ...(isAdmin ? ['Finance Action'] : []),
@@ -280,6 +284,8 @@ export default function App() {
       'Cancellation',
       'Approvals',
     ]
+
+    const p2StartIdx = headers.indexOf('P2 Date')
 
     return (
       <div style={{ marginBottom:24,borderRadius:10,overflow:'hidden',border:`0.5px solid ${borderColor}`,boxShadow:'0 1px 4px rgba(0,0,0,0.04)' }}>
@@ -302,14 +308,14 @@ export default function App() {
         </div>
 
         <div style={{ overflowX:'auto' }}>
-          <table style={{ width:'100%',borderCollapse:'collapse',background:'#fff' }}>
+          <table style={{ width:'100%',borderCollapse:'collapse',background:'#fff',tableLayout:'auto' }}>
             <thead>
               <tr>
                 {headers.map((h,i) => (
                   <th key={i} style={{
-                    ...th,
-                    background: !isUpsell && i >= headers.indexOf('P2 Date') && h !== 'Cancellation' && h !== 'Approvals'
-                      ? 'rgba(99,102,241,0.06)' : th.background
+                    ...bth,
+                    background: !isUpsell && p2StartIdx !== -1 && i >= p2StartIdx && h !== 'Cancellation' && h !== 'Approvals'
+                      ? 'rgba(99,102,241,0.06)' : bth.background
                   }}>{h}</th>
                 ))}
               </tr>
@@ -320,68 +326,64 @@ export default function App() {
                 const lic  = calcBHTotalLic(d)
                 const arr  = lic * 12
                 const comm = d.cancelled ? (d.recalculated_comm||0) : d.comm
-                const p2BG = { background:'#faf5ff' }
                 return (
                   <tr key={d.id} style={{ opacity:d.cancelled?0.75:1, background:d.cancelled?'#fff5f5':'#fff' }}>
                     {/* Client */}
-                    <td style={{ ...td,fontWeight:700 }}>
-                      {d.client}
-                      {d.cancelled && <span style={{ marginLeft:6,padding:'1px 6px',borderRadius:4,fontSize:10,background:'#fee2e2',color:'#991b1b' }}>Cancelled</span>}
+                    <td style={{ ...btd,fontWeight:700,maxWidth:120 }}>
+                      <div>{d.client}</div>
+                      {d.cancelled && <span style={{ padding:'1px 5px',borderRadius:4,fontSize:10,background:'#fee2e2',color:'#991b1b' }}>Cancelled</span>}
                     </td>
                     {/* Month */}
-                    <td style={td}>{d.month}</td>
+                    <td style={{ ...btd,whiteSpace:'nowrap' }}>{d.month}</td>
                     {/* Monthly Deal */}
-                    <td style={{ ...td,fontWeight:700,color:'#0ea5e9' }}>{fmt(lic)}</td>
+                    <td style={{ ...btd,fontWeight:700,color:'#0ea5e9',whiteSpace:'nowrap' }}>{fmt(lic)}</td>
                     {/* × 12 ARR */}
-                    <td style={{ ...td,color:'#475569' }}>{fmt(arr)}</td>
+                    <td style={{ ...btd,color:'#475569',whiteSpace:'nowrap' }}>{fmt(arr)}</td>
                     {/* Total Comm */}
-                    <td style={{ ...td,color,fontWeight:700 }}>{fmt(comm)}</td>
+                    <td style={{ ...btd,color,fontWeight:700,whiteSpace:'nowrap' }}>{fmt(comm)}</td>
                     {/* Payout 1 */}
-                    <td style={td}>{fmt(d.p1)}</td>
-                    {/* Payout 2 — new business only, grouped with P1 */}
-                    {!isUpsell && <td style={td}>{fmt(d.p2)}</td>}
-                    {/* Comm Pay Date (P1 date) */}
-                    <td style={td}><DateCell deal={d} which='p1_date' disabled={false} /></td>
+                    <td style={{ ...btd,whiteSpace:'nowrap' }}>{fmt(d.p1)}</td>
+                    {/* Comm Pay Date */}
+                    <td style={{ ...btd,whiteSpace:'nowrap' }}><DateCell deal={d} which='p1_date' disabled={false} /></td>
                     {/* P1 Status */}
-                    <td style={td}><Badge paid={d.p1_paid} /></td>
+                    <td style={btd}><Badge paid={d.p1_paid} /></td>
                     {/* Client 1st Payment */}
-                    <td style={td}><PaymentSelect deal={d} /></td>
-                    {/* Finance Action — P1 */}
+                    <td style={btd}><PaymentSelect deal={d} /></td>
+                    {/* Finance Action P1 */}
                     {isAdmin && (
-                      <td style={td}>
-                        <button
-                          onClick={()=>toggleP1(d)}
-                          style={actionBtn(d.p1_paid?'#991b1b':'#065f46', d.p1_paid?'#fee2e2':'#d1fae5')}
-                        >
+                      <td style={btd}>
+                        <button onClick={()=>toggleP1(d)} style={{ ...actionBtn(d.p1_paid?'#991b1b':'#065f46',d.p1_paid?'#fee2e2':'#d1fae5'),fontSize:10,padding:'3px 7px' }}>
                           {d.p1_paid ? '↩ Unpaid' : '✓ P1 Paid'}
                         </button>
                       </td>
                     )}
+                    {/* Payout 2 — new business only, now after Finance Action P1 */}
+                    {!isUpsell && <td style={{ ...btd,whiteSpace:'nowrap',...p2BG }}>{fmt(d.p2)}</td>}
                     {/* P2 Date / P2 Status / Finance Action P2 — new business only */}
                     {!isUpsell && <>
-                      <td style={{ ...td,...p2BG }}>
+                      <td style={{ ...btd,...p2BG,whiteSpace:'nowrap' }}>
                         <DateCell deal={d} which='p2_date' disabled={!d.p1_paid} />
                       </td>
-                      <td style={{ ...td,...p2BG }}>
+                      <td style={{ ...btd,...p2BG }}>
                         <Badge paid={d.p2_paid} voided={d.p2_voided} />
                       </td>
                       {isAdmin && (
-                        <td style={{ ...td,...p2BG }}>
+                        <td style={{ ...btd,...p2BG }}>
                           {d.p2_voided
-                            ? <span style={{ fontSize:11,color:'#ef4444',fontWeight:700 }}>Voided</span>
+                            ? <span style={{ fontSize:10,color:'#ef4444',fontWeight:700 }}>Voided</span>
                             : d.p1_paid
-                              ? <button onClick={()=>toggleP2(d)} style={actionBtn(d.p2_paid?'#991b1b':'#065f46',d.p2_paid?'#fee2e2':'#d1fae5')}>
+                              ? <button onClick={()=>toggleP2(d)} style={{ ...actionBtn(d.p2_paid?'#991b1b':'#065f46',d.p2_paid?'#fee2e2':'#d1fae5'),fontSize:10,padding:'3px 7px' }}>
                                   {d.p2_paid ? '↩ Unpaid' : '✓ P2 Paid'}
                                 </button>
-                              : <span style={{ fontSize:11,color:'#94a3b8' }}>Locked</span>
+                              : <span style={{ fontSize:10,color:'#94a3b8' }}>Locked</span>
                           }
                         </td>
                       )}
                     </>}
                     {/* Cancellation */}
-                    <td style={td}><CancelCellInner deal={d} /></td>
+                    <td style={btd}><CancelCellInner deal={d} /></td>
                     {/* Approvals */}
-                    <td style={td}><ApprovalCell item={d} table='deals' setter={setDeals} /></td>
+                    <td style={btd}><ApprovalCell item={d} table='deals' setter={setDeals} /></td>
                   </tr>
                 )
               })}
@@ -389,48 +391,28 @@ export default function App() {
 
             <tfoot>
               <tr style={{ background:'#f8fafc' }}>
-                <td style={{ ...td,fontWeight:800 }} colSpan={2}>TOTALS</td>
-                {/* Monthly Deal total */}
-                <td style={{ ...td,fontWeight:800,color:'#0ea5e9' }}>
-                  {fmt(sectionDeals.reduce((s,d)=>s+calcBHTotalLic(d),0))}
-                </td>
-                {/* ARR total */}
-                <td style={{ ...td,fontWeight:800,color:'#475569' }}>
-                  {fmt(sectionDeals.reduce((s,d)=>s+calcBHTotalLic(d)*12,0))}
-                </td>
-                {/* Total Comm */}
-                <td style={{ ...td,fontWeight:800,color }}>{fmt(sectionComm)}</td>
-                {/* P1 total */}
-                <td style={{ ...td,fontWeight:700 }}>
-                  {fmt(sectionDeals.reduce((s,d)=>s+(d.p1||0),0))}
-                </td>
-                {/* P2 total (new only) */}
-                {!isUpsell && (
-                  <td style={{ ...td,fontWeight:700 }}>
-                    {fmt(sectionDeals.reduce((s,d)=>s+(d.p2||0),0))}
-                  </td>
-                )}
+                <td style={{ ...btd,fontWeight:800 }} colSpan={2}>TOTALS</td>
+                <td style={{ ...btd,fontWeight:800,color:'#0ea5e9' }}>{fmt(sectionDeals.reduce((s,d)=>s+calcBHTotalLic(d),0))}</td>
+                <td style={{ ...btd,fontWeight:800,color:'#475569' }}>{fmt(sectionDeals.reduce((s,d)=>s+calcBHTotalLic(d)*12,0))}</td>
+                <td style={{ ...btd,fontWeight:800,color }}>{fmt(sectionComm)}</td>
+                <td style={{ ...btd,fontWeight:700 }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p1||0),0))}</td>
                 {/* Comm Pay Date — blank */}
-                <td style={td}></td>
+                <td style={btd}></td>
                 {/* P1 paid summary */}
-                <td style={{ ...td,fontSize:11,color:'#10b981',fontWeight:700 }}>
-                  {fmt(sectionDeals.reduce((s,d)=>s+(d.p1_paid?d.p1:0),0))} paid
-                </td>
+                <td style={{ ...btd,color:'#10b981',fontWeight:700 }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p1_paid?d.p1:0),0))} paid</td>
                 {/* Client 1st Payment — blank */}
-                <td style={td}></td>
+                <td style={btd}></td>
                 {/* Finance Action P1 — blank */}
-                {isAdmin && <td style={td}></td>}
-                {/* P2 Date / P2 Status / Finance Action P2 totals (new only) */}
+                {isAdmin && <td style={btd}></td>}
+                {/* Payout 2 / P2 Date / P2 Status / Finance Action P2 totals (new only) */}
                 {!isUpsell && <>
-                  <td style={{ background:'#faf5ff' }}></td>
-                  <td style={{ ...td,fontSize:11,color:'#10b981',fontWeight:700,background:'#faf5ff' }}>
-                    {fmt(sectionDeals.reduce((s,d)=>s+(d.p2_paid?d.p2:0),0))} paid
-                  </td>
-                  {isAdmin && <td style={{ background:'#faf5ff' }}></td>}
+                  <td style={{ ...btd,...p2BG,fontWeight:700 }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p2||0),0))}</td>
+                  <td style={{ ...btd,...p2BG }}></td>
+                  <td style={{ ...btd,...p2BG,color:'#10b981',fontWeight:700 }}>{fmt(sectionDeals.reduce((s,d)=>s+(d.p2_paid?d.p2:0),0))} paid</td>
+                  {isAdmin && <td style={{ ...btd,...p2BG }}></td>}
                 </>}
-                {/* Cancellation / Approvals — blank */}
-                <td style={td}></td>
-                <td style={td}></td>
+                <td style={btd}></td>
+                <td style={btd}></td>
               </tr>
             </tfoot>
           </table>
