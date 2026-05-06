@@ -173,6 +173,7 @@ export default function App() {
     if(isBH){
       total=calcBHTotalLic(editingDeal);const isUpsell=editingDeal.deal_type==='upsell'
       arr=isUpsell?total:total*12;comm=isUpsell?Math.round(total*0.04):Math.round(total*12*0.08);p1=isUpsell?comm:Math.round(comm/2);p2=isUpsell?0:Math.round(comm/2)
+      editingDeal.p2_voided=isUpsell
     } else {
       total=(editingDeal.app_users*editingDeal.a_user_cost)+(editingDeal.lite_users*(editingDeal.l_user_cost||0))+Math.max(0,editingDeal.admin-editingDeal.free_admin)*editingDeal.admin_cost+(editingDeal.dashboards*editingDeal.dash_cost)
       arr=total*12;const isLuke=editingDeal.salesperson_id===LUKE_ID;comm=isLuke?total:arr*0.08;p1=isLuke?total:comm/2;p2=isLuke?0:comm/2
