@@ -36,7 +36,6 @@ const BLANK_REFERRAL = { referred_by:'', client:'', mrr:0, date:'', paid:false }
 const exportToExcel = async (deals, referrals, name, isLukeView, company) => {
   const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs')
   const fmtN = (n) => Number(n||0)
-  const isBH = company==='bloodhound'
   const payoutHeaders = isBH
     ? ['Client','Month','Deal Type','Patrol Qty','Patrol Rate','Inspect Qty','Inspect Rate','VM Qty','VM Rate','iLog Qty','iLog Rate','Total Lic','Invoice Total','Commission','Payout 1','Comm Pay Date','P1 Status','Client 1st Payment','Payout 2','P2 Date','P2 Status','Quote No','Inception','Cancelled','Cancellation Date','Notes']
     : ['Client','Monthly Deal','ARR','Commission','Payout 1','P1 Date','P1 Status','1st Payment',...(!isLukeView?['Payout 2','P2 Date','P2 Status']:[]),'Cancelled','Cancellation Date']
@@ -104,14 +103,14 @@ const CancelCell = ({ deal, isAdmin, accentColor, onUpdate }) => {
 
 export default function App() {
   const [session,setSession]=useState(null);const [profile,setProfile]=useState(null);const [deals,setDeals]=useState([]);const [profiles,setProfiles]=useState([]);const [referrals,setReferrals]=useState([]);const [company,setCompany]=useState('xactco');const [selectedSP,setSelectedSP]=useState(null);const [tab,setTab]=useState('summary');const [showAdd,setShowAdd]=useState(false);const [showAddReferral,setShowAddReferral]=useState(false);const [newDeal,setNewDeal]=useState(BLANK_XACTCO_DEAL);const [newReferral,setNewReferral]=useState(BLANK_REFERRAL);const [editingDate,setEditingDate]=useState(null);const [editingDeal,setEditingDeal]=useState(null);const [loading,setLoading]=useState(true)
-  const isBH = company==='bloodhound'
+  const isBH = (profile?.role==='admin'||profile?.role==='manager') ? company==='bloodhound' : profile?.company==='bloodhound'
 
   useEffect(()=>{ supabase.auth.getSession().then(({data:{session}})=>setSession(session));supabase.auth.onAuthStateChange((_e,s)=>setSession(s)) },[])
   useEffect(()=>{ if(!session){setLoading(false);return};loadProfile() },[session])
   useEffect(()=>{ if(!profile)return;if(profile.role==='admin'||profile.role==='manager')loadAllProfiles();else loadDeals(profile.id) },[profile,company])
   useEffect(()=>{ if(selectedSP)loadDeals(selectedSP.id) },[selectedSP])
 
-  const loadProfile = async () => { const{data}=await supabase.from('profiles').select('*').eq('id',session.user.id).single();setProfile(data);setLoading(false) }
+  const loadProfile = async () => { const{data}=await supabase.from('profiles').select('*').eq('id',session.user.id).single();setProfile(data);if(data?.company==='bloodhound'){setCompany('bloodhound');setNewDeal(BLANK_BH_DEAL)};setLoading(false) }
   const loadAllProfiles = async () => { const{data}=await supabase.from('profiles').select('*').eq('company',company);const sps=(data||[]).filter(p=>p.role==='salesperson'||p.role==='admin');setProfiles(sps);if(sps.length)setSelectedSP(sps[0]) }
   const loadDeals = async (spId) => { const{data}=await supabase.from('deals').select('*').eq('salesperson_id',spId).eq('company',company).order('created_at');const sorted=(data||[]).sort((a,b)=>MONTHS.indexOf(a.p1_date)-MONTHS.indexOf(b.p1_date));setDeals(sorted);loadReferrals(spId) }
   const loadReferrals = async (spId) => { const{data}=await supabase.from('referrals').select('*').eq('salesperson_id',spId).eq('company',company).order('created_at');setReferrals(data||[]) }
@@ -145,10 +144,12 @@ export default function App() {
   }
 
   const addDeal = async () => {
-    if(!newDeal.client||!newDeal.p1_date)return
-    const spId=(profile.role==='admin'||profile.role==='manager')?selectedSP?.id:profile.id
+    if(!newDeal.client||!newDeal.p1_date)return alert('Please fill in Client and P1 Date')
+    const spId=(profile.role==='admin'||profile.role==='manager')?(selectedSP?.id||profile.id):profile.id
+    const spCompany=(profile.role==='admin'||profile.role==='manager')?company:profile.company
+    const isBHDeal=spCompany==='bloodhound'
     let total,arr,comm,p1,p2,p2_date,deal_type='new'
-    if(isBH){
+    if(isBHDeal){
       total=calcBHTotalLic(newDeal)
       const existing=isExistingClient(newDeal.inception_date,newDeal.month)
       deal_type=newDeal.deal_type||(existing?'upsell':'new')
@@ -161,8 +162,9 @@ export default function App() {
       total=(newDeal.app_users*newDeal.a_user_cost)+(newDeal.lite_users*(newDeal.l_user_cost||0))+Math.max(0,newDeal.admin-newDeal.free_admin)*newDeal.admin_cost+(newDeal.dashboards*newDeal.dash_cost)
       arr=total*12;const isLuke=spId===LUKE_ID;comm=isLuke?total:arr*0.08;p1=isLuke?total:comm/2;p2=isLuke?0:comm/2;p2_date=isLuke?'':getP2Month(newDeal.p1_date)
     }
-    await supabase.from('deals').insert([{...newDeal,salesperson_id:spId,company,total,arr,comm,p1,p2,p2_date,deal_type,p1_paid:false,p2_paid:false,approved_luke:false,approved_bernard:false,approved_romaine:false,cancelled:false,p2_voided:deal_type==='upsell'}])
-    setShowAdd(false);setNewDeal(isBH?BLANK_BH_DEAL:BLANK_XACTCO_DEAL);loadDeals(spId)
+    const {error}=await supabase.from('deals').insert([{...newDeal,salesperson_id:spId,company:spCompany,total,arr,comm,p1,p2,p2_date,deal_type,p1_paid:false,p2_paid:false,approved_luke:false,approved_bernard:false,approved_romaine:false,cancelled:false,p2_voided:deal_type==='upsell'}])
+    if(error){alert('Error saving: '+error.message);return}
+    setShowAdd(false);setNewDeal(isBHDeal?BLANK_BH_DEAL:BLANK_XACTCO_DEAL);loadDeals(spId)
   }
 
   const deleteDeal = async (id) => { if(!window.confirm('Delete this deal?'))return;await supabase.from('deals').delete().eq('id',id);setDeals(prev=>prev.filter(d=>d.id!==id)) }
@@ -233,8 +235,8 @@ export default function App() {
 
   const EditModal = () => {
     if(!editingDeal)return null
-    const fields=isBH?[['Month','month','select'],['Client','client','text'],['Deal Type','deal_type','deal_type_select'],['Patrol Qty','patrol_qty','number'],['Patrol Rate','patrol_rate','number'],['Inspect Qty','inspect_qty','number'],['Inspect Rate','inspect_rate','number'],['VM Qty','vm_qty','number'],['VM Rate','vm_rate','number'],['iLog Qty','ilog_qty','number'],['iLog Rate','ilog_rate','number'],['Invoice Total','invoice_total','number'],['Quote No','quote_no','text'],['Inception Date','inception_date','text'],['P1 Date','p1_date','select'],['Billing Date','billing_date','text'],['Notes','notes','text']]:
-    [['Month','month','select'],['Client','client','text'],['Once Off','once_off','number'],['App Users','app_users','number'],['Lite Users','lite_users','number'],['App User Cost','a_user_cost','number'],['Lite User Cost','l_user_cost','number'],['Admins','admin','number'],['Free Admins','free_admin','number'],['Admin Cost','admin_cost','number'],['Dashboards','dashboards','number'],['Dash Cost','dash_cost','number'],['Billing Date','billing_date','text'],['P1 Date','p1_date','select'],['Quote No','quote_no','text'],['Inception Date','inception_date','text'],['Notes','notes','text']]
+    const fields=isBH?[['Month','month','select'],['Client','client','text'],['Deal Type','deal_type','deal_type_select'],['Patrol Qty','patrol_qty','number'],['Patrol Rate','patrol_rate','number'],['Inspect Qty','inspect_qty','number'],['Inspect Rate','inspect_rate','number'],['VM Qty','vm_qty','number'],['VM Rate','vm_rate','number'],['iLog Qty','ilog_qty','number'],['iLog Rate','ilog_rate','number'],['Invoice Total','invoice_total','number'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['P1 Date','p1_date','select'],['Billing Date','billing_date','text'],['Notes','notes','text']]:
+    [['Month','month','select'],['Client','client','text'],['Once Off','once_off','number'],['App Users','app_users','number'],['Lite Users','lite_users','number'],['App User Cost','a_user_cost','number'],['Lite User Cost','l_user_cost','number'],['Admins','admin','number'],['Free Admins','free_admin','number'],['Admin Cost','admin_cost','number'],['Dashboards','dashboards','number'],['Dash Cost','dash_cost','number'],['Billing Date','billing_date','text'],['P1 Date','p1_date','select'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['Notes','notes','text']]
     return(
       <div style={{ position:'fixed',top:0,left:0,right:0,bottom:0,background:'#0008',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center' }}>
         <div style={{ background:'#fff',borderRadius:16,padding:28,width:740,maxHeight:'80vh',overflowY:'auto',boxShadow:'0 8px 32px #0003' }}>
@@ -433,7 +435,7 @@ export default function App() {
             <p style={{ margin:'4px 0 0',color:'#64748b',fontSize:13 }}>FY 2025 / 2026 · {isAdmin?'👑 Admin':`👤 ${profile?.name}`}</p>
           </div>
           <div style={{ display:'flex',gap:10,alignItems:'center' }}>
-            {isAdmin&&<button onClick={()=>setShowAdd(!showAdd)} style={{ padding:'8px 16px',background:accentColor,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13 }}>+ Add Deal</button>}
+            <button onClick={()=>setShowAdd(!showAdd)} style={{ padding:'8px 16px',background:accentColor,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13 }}>+ Add Deal</button>
             <button onClick={()=>exportToExcel(deals,referrals,displayName||'Export',isLukeView,company)} style={{ padding:'8px 16px',background:'#10b981',color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13 }}>⬇ Export</button>
             <button onClick={signOut} style={{ padding:'8px 14px',background:'#e2e8f0',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:13,color:'#475569' }}>Sign Out</button>
           </div>
@@ -447,9 +449,9 @@ export default function App() {
           {[{label:`${displayName||'...'} — Total Commission`,value:fmt(totalComm),color:accentColor},{label:'Total Paid Out',value:fmt(totalPaid),color:'#10b981'},{label:'Outstanding',value:fmt(totalPending),color:'#f59e0b'}].map(k=>(<div key={k.label} style={{ ...card,borderTop:`4px solid ${k.color}`,marginBottom:0 }}><div style={{ fontSize:12,color:'#64748b',fontWeight:600,marginBottom:4 }}>{k.label}</div><div style={{ fontSize:22,fontWeight:800,color:k.color }}>{k.value}</div></div>))}
         </div>
 
-        {showAdd&&isAdmin&&(
+        {showAdd&&(
           <div style={{ ...card,border:`2px solid ${accentColor}` }}>
-            <h3 style={{ margin:'0 0 14px',color:accentColor,fontSize:15 }}>New Deal — {displayName}{isBH&&<span style={{ fontSize:11,color:'#64748b',fontWeight:400 }}> · SLA licence revenue only</span>}</h3>
+            <h3 style={{ margin:'0 0 14px',color:accentColor,fontSize:15 }}>New Deal — {displayName||profile?.name}{isBH&&<span style={{ fontSize:11,color:'#64748b',fontWeight:400 }}> · SLA licence revenue only</span>}</h3>
             {isBH&&(
               <div style={{ marginBottom:14,display:'flex',gap:10,alignItems:'center' }}>
                 <span style={{ fontSize:12,fontWeight:600,color:'#475569' }}>Deal Type:</span>
@@ -459,8 +461,8 @@ export default function App() {
               </div>
             )}
             <div style={{ display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10 }}>
-              {(isBH?[['Month','month','select'],['Client','client','text'],['Quote No','quote_no','text'],['Inception Date','inception_date','text'],['Patrol Qty','patrol_qty','number'],['Patrol Rate','patrol_rate','number'],['Inspect Qty','inspect_qty','number'],['Inspect Rate','inspect_rate','number'],['VM Qty','vm_qty','number'],['VM Rate','vm_rate','number'],['iLog Qty','ilog_qty','number'],['iLog Rate','ilog_rate','number'],['Invoice Total','invoice_total','number'],['P1 Date','p1_date','select'],['Billing Date','billing_date','text'],['Notes','notes','text']]:
-              [['Month','month','select'],['Client','client','text'],['Once Off','once_off','number'],['App Users','app_users','number'],['Lite Users','lite_users','number'],['App User Cost','a_user_cost','number'],['Lite User Cost','l_user_cost','number'],['Admins','admin','number'],['Free Admins','free_admin','number'],['Admin Cost','admin_cost','number'],['Dashboards','dashboards','number'],['Dash Cost','dash_cost','number'],['Billing Date','billing_date','text'],['P1 Date','p1_date','select'],['Quote No','quote_no','text'],['Inception Date','inception_date','text'],['Notes','notes','text']]).map(([label,key,type])=>(<div key={key}><div style={{ fontSize:11,fontWeight:600,color:'#64748b',marginBottom:3 }}>{label}</div>{type==='select'?<select value={newDeal[key]||''} onChange={e=>setNewDeal(p=>({...p,[key]:e.target.value}))} style={{ width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:12 }}><option value=''>— select —</option>{MONTHS.map(m=><option key={m}>{m}</option>)}</select>:<input type={type} value={newDeal[key]||''} onChange={e=>setNewDeal(p=>({...p,[key]:type==='number'?parseFloat(e.target.value)||0:e.target.value}))} style={{ width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:12,boxSizing:'border-box' }} />}</div>))}
+              {(isBH?[['Month','month','select'],['Client','client','text'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['Patrol Qty','patrol_qty','number'],['Patrol Rate','patrol_rate','number'],['Inspect Qty','inspect_qty','number'],['Inspect Rate','inspect_rate','number'],['VM Qty','vm_qty','number'],['VM Rate','vm_rate','number'],['iLog Qty','ilog_qty','number'],['iLog Rate','ilog_rate','number'],['Invoice Total','invoice_total','number'],['P1 Date','p1_date','select'],['Billing Date','billing_date','text'],['Notes','notes','text']]:
+              [['Month','month','select'],['Client','client','text'],['Once Off','once_off','number'],['App Users','app_users','number'],['Lite Users','lite_users','number'],['App User Cost','a_user_cost','number'],['Lite User Cost','l_user_cost','number'],['Admins','admin','number'],['Free Admins','free_admin','number'],['Admin Cost','admin_cost','number'],['Dashboards','dashboards','number'],['Dash Cost','dash_cost','number'],['Billing Date','billing_date','text'],['P1 Date','p1_date','select'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['Notes','notes','text']]).map(([label,key,type])=>(<div key={key}><div style={{ fontSize:11,fontWeight:600,color:'#64748b',marginBottom:3 }}>{label}</div>{type==='select'?<select value={newDeal[key]||''} onChange={e=>setNewDeal(p=>({...p,[key]:e.target.value}))} style={{ width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:12 }}><option value=''>— select —</option>{MONTHS.map(m=><option key={m}>{m}</option>)}</select>:<input type={type} value={newDeal[key]||''} onChange={e=>setNewDeal(p=>({...p,[key]:type==='number'?parseFloat(e.target.value)||0:e.target.value}))} style={{ width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:12,boxSizing:'border-box' }} />}</div>))}
             </div>
             {isBH&&calcBHTotalLic(newDeal)>0&&(<div style={{ marginTop:10,padding:'8px 14px',borderRadius:8,background:newDeal.deal_type==='upsell'?'rgba(245,158,11,0.1)':'rgba(14,165,233,0.1)',fontSize:12,fontWeight:600,color:newDeal.deal_type==='upsell'?'#92400e':'#0369a1' }}>Lic Total: <strong>{fmt(calcBHTotalLic(newDeal))}</strong> → Commission: <strong>{fmt(newDeal.deal_type==='upsell'?Math.round(calcBHTotalLic(newDeal)*0.04):Math.round(calcBHTotalLic(newDeal)*12*0.08))}</strong>{newDeal.deal_type!=='upsell'&&newDeal.p1_date&&<span style={{ marginLeft:8 }}>P2 auto-set: <strong>{getP2Month(newDeal.p1_date)||'—'}</strong></span>}</div>)}
             {!isBH&&newDeal.p1_date&&!isLukeView&&<div style={{ marginTop:10,fontSize:12,color:accentColor,fontWeight:600 }}>📅 P2 auto-set to: <strong>{getP2Month(newDeal.p1_date)||'—'}</strong></div>}
