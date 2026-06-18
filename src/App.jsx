@@ -36,10 +36,11 @@ const BLANK_REFERRAL = { referred_by:'', client:'', mrr:0, date:'', paid:false }
 const exportToExcel = async (deals, referrals, name, isLukeView, company) => {
   const XLSX = await import('https://cdn.sheetjs.com/xlsx-0.20.1/package/xlsx.mjs')
   const fmtN = (n) => Number(n||0)
-  const payoutHeaders = isBH
+  const isBHExport = company==='bloodhound'
+  const payoutHeaders = isBHExport
     ? ['Client','Month','Deal Type','Patrol Qty','Patrol Rate','Inspect Qty','Inspect Rate','VM Qty','VM Rate','iLog Qty','iLog Rate','Total Lic','Invoice Total','Commission','Payout 1','Comm Pay Date','P1 Status','Client 1st Payment','Payout 2','P2 Date','P2 Status','Quote No','Inception','Cancelled','Cancellation Date','Notes']
     : ['Client','Monthly Deal','ARR','Commission','Payout 1','P1 Date','P1 Status','1st Payment',...(!isLukeView?['Payout 2','P2 Date','P2 Status']:[]),'Cancelled','Cancellation Date']
-  const payoutRows = deals.map(d => isBH ? [
+  const payoutRows = deals.map(d => isBHExport ? [
     d.client, d.month, d.deal_type==='upsell'?'Upsell (4%)':'New Client (8%)',
     d.patrol_qty||0, d.patrol_rate||0, d.inspect_qty||0, d.inspect_rate||0, d.vm_qty||0, d.vm_rate||0, d.ilog_qty||0, d.ilog_rate||0,
     fmtN(calcBHTotalLic(d)), fmtN(d.invoice_total), fmtN(d.comm),
@@ -436,7 +437,7 @@ export default function App() {
           </div>
           <div style={{ display:'flex',gap:10,alignItems:'center' }}>
             <button onClick={()=>setShowAdd(!showAdd)} style={{ padding:'8px 16px',background:accentColor,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13 }}>+ Add Deal</button>
-            <button onClick={()=>exportToExcel(deals,referrals,displayName||'Export',isLukeView,company)} style={{ padding:'8px 16px',background:'#10b981',color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13 }}>⬇ Export</button>
+            <button onClick={()=>exportToExcel(deals,referrals,displayName||'Export',isLukeView,company).catch(err=>alert('Export failed: '+err.message))} style={{ padding:'8px 16px',background:'#10b981',color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13 }}>⬇ Export</button>
             <button onClick={signOut} style={{ padding:'8px 14px',background:'#e2e8f0',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:13,color:'#475569' }}>Sign Out</button>
           </div>
         </div>
