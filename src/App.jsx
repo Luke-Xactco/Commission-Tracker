@@ -29,6 +29,34 @@ const calcCancelledComm = (deal, company) => {
   return Math.round((deal.total||0)*months*0.08)
 }
 
+// ── SINGLE SOURCE OF TRUTH for deal financials ──────────────────────────
+// Every place that creates or edits a deal (addDeal, saveEditedDeal,
+// updateDealType) calls this one function instead of repeating the maths.
+// This is what prevents drift bugs like p2_voided getting out of sync.
+const calcDealFinancials = (deal, company, salespersonId) => {
+  const isBHDeal = company === 'bloodhound'
+  if (isBHDeal) {
+    const total = calcBHTotalLic(deal)
+    const dealType = deal.deal_type || (isExistingClient(deal.inception_date, deal.month) ? 'upsell' : 'new')
+    const isUpsell = dealType === 'upsell'
+    const arr = total * 12
+    const comm = calcBHComm(total, dealType)
+    const p1 = isUpsell ? comm : Math.round(comm / 2)
+    const p2 = isUpsell ? 0 : Math.round(comm / 2)
+    const p2_date = isUpsell ? '' : getP2Month(deal.p1_date)
+    return { total, arr, comm, p1, p2, p2_date, deal_type: dealType, p2_voided: isUpsell }
+  } else {
+    const total = (deal.app_users*deal.a_user_cost)+(deal.lite_users*(deal.l_user_cost||0))+Math.max(0,deal.admin-deal.free_admin)*deal.admin_cost+(deal.dashboards*deal.dash_cost)
+    const arr = total * 12
+    const isLuke = salespersonId === LUKE_ID
+    const comm = isLuke ? total : arr * 0.08
+    const p1 = isLuke ? total : comm / 2
+    const p2 = isLuke ? 0 : comm / 2
+    const p2_date = isLuke ? '' : getP2Month(deal.p1_date)
+    return { total, arr, comm, p1, p2, p2_date, deal_type: 'new', p2_voided: false }
+  }
+}
+
 const BLANK_XACTCO_DEAL = { month:'Jan-26', client:'', once_off:0, app_users:0, lite_users:0, a_user_cost:950, l_user_cost:0, admin:1, free_admin:0, admin_cost:1000, dashboards:0, dash_cost:0, billing_date:'', p1_date:'', notes:'', first_payment_received:'TBC', inception_date:'', quote_no:'' }
 const BLANK_BH_DEAL = { month:'Jan-26', client:'', patrol_qty:0, patrol_rate:0, inspect_qty:0, inspect_rate:0, vm_qty:0, vm_rate:0, ilog_qty:0, ilog_rate:0, invoice_total:0, quote_no:'', inception_date:'', p1_date:'', billing_date:'', notes:'', first_payment_received:'TBC', deal_type:'new' }
 const BLANK_REFERRAL = { referred_by:'', client:'', mrr:0, date:'', paid:false }
@@ -124,13 +152,8 @@ export default function App() {
 
   const updateDealType = async (id, dealType) => {
     const deal=deals.find(d=>d.id===id)
-    const lic=calcBHTotalLic(deal)
-    const comm=calcBHComm(lic,dealType)
-    const isUpsell=dealType==='upsell'
-    const p1=isUpsell?comm:Math.round(comm/2)
-    const p2=isUpsell?0:Math.round(comm/2)
-    const p2_date=isUpsell?'':getP2Month(deal.p1_date)
-    const updates={deal_type:dealType,arr:lic*12,comm,p1,p2,p2_date,p2_voided:isUpsell}
+    const result=calcDealFinancials({...deal,deal_type:dealType},'bloodhound',deal.salesperson_id)
+    const updates={deal_type:result.deal_type,arr:result.arr,comm:result.comm,p1:result.p1,p2:result.p2,p2_date:result.p2_date,p2_voided:result.p2_voided}
     await supabase.from('deals').update(updates).eq('id',id)
     setDeals(prev=>prev.map(d=>d.id===id?{...d,...updates}:d))
   }
@@ -146,42 +169,30 @@ export default function App() {
 
   const addDeal = async () => {
     if(!newDeal.client||!newDeal.p1_date)return alert('Please fill in Client and P1 Date')
-    const spId=(profile.role==='admin'||profile.role==='manager')?(selectedSP?.id||profile.id):profile.id
-    const spCompany=(profile.role==='admin'||profile.role==='manager')?company:profile.company
-    const isBHDeal=spCompany==='bloodhound'
-    let total,arr,comm,p1,p2,p2_date,deal_type='new'
-    if(isBHDeal){
-      total=calcBHTotalLic(newDeal)
-      const existing=isExistingClient(newDeal.inception_date,newDeal.month)
-      deal_type=newDeal.deal_type||(existing?'upsell':'new')
-      arr=total*12
-      comm=calcBHComm(total,deal_type)
-      p1=deal_type==='upsell'?comm:Math.round(comm/2)
-      p2=deal_type==='upsell'?0:Math.round(comm/2)
-      p2_date=deal_type==='upsell'?'':getP2Month(newDeal.p1_date)
-    } else {
-      total=(newDeal.app_users*newDeal.a_user_cost)+(newDeal.lite_users*(newDeal.l_user_cost||0))+Math.max(0,newDeal.admin-newDeal.free_admin)*newDeal.admin_cost+(newDeal.dashboards*newDeal.dash_cost)
-      arr=total*12;const isLuke=spId===LUKE_ID;comm=isLuke?total:arr*0.08;p1=isLuke?total:comm/2;p2=isLuke?0:comm/2;p2_date=isLuke?'':getP2Month(newDeal.p1_date)
-    }
-    const {error}=await supabase.from('deals').insert([{...newDeal,salesperson_id:spId,company:spCompany,total,arr,comm,p1,p2,p2_date,deal_type,p1_paid:false,p2_paid:false,approved_luke:false,approved_bernard:false,approved_romaine:false,cancelled:false,p2_voided:deal_type==='upsell'}])
+    const spId = (profile.role==='admin'||profile.role==='manager') ? (selectedSP?.id||profile.id) : profile.id
+    const spCompany = (profile.role==='admin'||profile.role==='manager') ? company : profile.company
+    const result = calcDealFinancials(newDeal, spCompany, spId)
+    const {error}=await supabase.from('deals').insert([{
+      ...newDeal,salesperson_id:spId,company:spCompany,
+      total:result.total,arr:result.arr,comm:result.comm,p1:result.p1,p2:result.p2,
+      p2_date:result.p2_date,deal_type:result.deal_type,p2_voided:result.p2_voided,
+      p1_paid:false,p2_paid:false,approved_luke:false,approved_bernard:false,approved_romaine:false,cancelled:false
+    }])
     if(error){alert('Error saving: '+error.message);return}
-    setShowAdd(false);setNewDeal(isBHDeal?BLANK_BH_DEAL:BLANK_XACTCO_DEAL);loadDeals(spId)
+    setShowAdd(false);setNewDeal(spCompany==='bloodhound'?BLANK_BH_DEAL:BLANK_XACTCO_DEAL);loadDeals(spId)
   }
 
   const deleteDeal = async (id) => { if(!window.confirm('Delete this deal?'))return;await supabase.from('deals').delete().eq('id',id);setDeals(prev=>prev.filter(d=>d.id!==id)) }
 
   const saveEditedDeal = async () => {
     if(!editingDeal)return
-    let total,arr,comm,p1,p2
-    if(isBH){
-      total=calcBHTotalLic(editingDeal);const isUpsell=editingDeal.deal_type==='upsell'
-      arr=isUpsell?total:total*12;comm=isUpsell?Math.round(total*0.04):Math.round(total*12*0.08);p1=isUpsell?comm:Math.round(comm/2);p2=isUpsell?0:Math.round(comm/2)
-      editingDeal.p2_voided=isUpsell
-    } else {
-      total=(editingDeal.app_users*editingDeal.a_user_cost)+(editingDeal.lite_users*(editingDeal.l_user_cost||0))+Math.max(0,editingDeal.admin-editingDeal.free_admin)*editingDeal.admin_cost+(editingDeal.dashboards*editingDeal.dash_cost)
-      arr=total*12;const isLuke=editingDeal.salesperson_id===LUKE_ID;comm=isLuke?total:arr*0.08;p1=isLuke?total:comm/2;p2=isLuke?0:comm/2
-    }
-    await supabase.from('deals').update({...editingDeal,total,arr,comm,p1,p2}).eq('id',editingDeal.id)
+    const dealCompany = isBH ? 'bloodhound' : 'xactco'
+    const result = calcDealFinancials(editingDeal, dealCompany, editingDeal.salesperson_id)
+    await supabase.from('deals').update({
+      ...editingDeal,
+      total:result.total,arr:result.arr,comm:result.comm,p1:result.p1,p2:result.p2,
+      deal_type:result.deal_type,p2_voided:result.p2_voided
+    }).eq('id',editingDeal.id)
     setEditingDeal(null);loadDeals(selectedSP?.id||profile.id)
   }
 
