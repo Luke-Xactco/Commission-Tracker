@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import { supabase } from './supabase'
 
 const fmt = (n) => `R ${Number(n||0).toLocaleString('en-ZA',{minimumFractionDigits:0,maximumFractionDigits:0})}`
@@ -225,44 +225,52 @@ export default function App() {
     setAllDeals(prev=>prev.map(d=>d.id===id?{...d,...updates}:d))
   }
 
-  const toggleP1 = useCallback(async (deal) => {
+  const toggleP1 = async (deal) => {
     const nowPaid=!deal.p1_paid
     const p2_date=nowPaid?getP2Month(deal.p1_date):deal.p2_date
     const updates={p1_paid:nowPaid,p1_paid_date:nowPaid?new Date().toLocaleDateString('en-ZA'):null,p2_date}
-    await supabase.from('deals').update(updates).eq('id',deal.id)
-    patchDeals(deal.id,updates)
-  },[])
+    const{error}=await supabase.from('deals').update(updates).eq('id',deal.id)
+    if(error){alert('Error: '+error.message);return}
+    await loadDeals(selectedSP?.id||profile.id)
+    await loadAllDeals()
+  }
 
-  const toggleP2 = useCallback(async (deal) => {
+  const toggleP2 = async (deal) => {
     const updates={p2_paid:!deal.p2_paid}
-    await supabase.from('deals').update(updates).eq('id',deal.id)
-    patchDeals(deal.id,updates)
-  },[])
+    const{error}=await supabase.from('deals').update(updates).eq('id',deal.id)
+    if(error){alert('Error: '+error.message);return}
+    await loadDeals(selectedSP?.id||profile.id)
+    await loadAllDeals()
+  }
 
-  const updateDate = useCallback(async (deal,which,val) => {
+  const updateDate = async (deal,which,val) => {
     const updates={[which]:val}
     if(which==='p1_date'&&!deal.p2_paid)updates.p2_date=getP2Month(val)
     await supabase.from('deals').update(updates).eq('id',deal.id)
-    patchDeals(deal.id,updates)
     setEditingDate(null)
-  },[])
+    await loadDeals(selectedSP?.id||profile.id)
+  }
 
-  const updatePaymentStatus = useCallback(async (id,val) => {
+  const updatePaymentStatus = async (id,val) => {
     await supabase.from('deals').update({first_payment_received:val}).eq('id',id)
-    patchDeals(id,{first_payment_received:val})
-  },[])
+    await loadDeals(selectedSP?.id||profile.id)
+  }
 
-  const toggleApproval = useCallback(async (id,key,table,setter) => {
+  const toggleApproval = async (id,key,table,setter) => {
     const src=table==='deals'?deals:referrals
     const item=src.find(x=>x.id===id)
     if(!item)return
     const updates={[key]:!item[key]}
     await supabase.from(table).update(updates).eq('id',id)
-    setter(prev=>prev.map(x=>x.id===id?{...x,...updates}:x))
-    if(table==='deals')setAllDeals(prev=>prev.map(x=>x.id===id?{...x,...updates}:x))
-  },[deals,referrals])
+    if(table==='deals'){
+      await loadDeals(selectedSP?.id||profile.id)
+      await loadAllDeals()
+    } else {
+      setter(prev=>prev.map(x=>x.id===id?{...x,...updates}:x))
+    }
+  }
 
-  const updateCancellation = useCallback(async (id,cancelled,cancellation_date,active_months,clawback_settled) => {
+  const updateCancellation = async (id,cancelled,cancellation_date,active_months,clawback_settled) => {
     const deal=deals.find(d=>d.id===id)
     if(!deal)return
     const commPerMonth=(deal.comm||0)/12
@@ -271,8 +279,9 @@ export default function App() {
     const diff=earned-paidOut
     const updates={cancelled,cancellation_date,active_months,recalculated_comm:cancelled?earned:0,p2_voided:cancelled&&!deal.p2_paid,clawback_settled:clawback_settled||false,clawback_amount:diff}
     await supabase.from('deals').update(updates).eq('id',id)
-    patchDeals(id,updates)
-  },[deals])
+    await loadDeals(selectedSP?.id||profile.id)
+    await loadAllDeals()
+  }
 
   const addDeal = async () => {
     if(!newDeal.client||!newDeal.p1_date)return alert('Please fill in Client and P1 Date')
@@ -725,54 +734,225 @@ export default function App() {
         )}
 
         {tab==='monthly'&&(()=>{
-          const spDeals=deals.filter(d=>d.approved_luke&&!d.cancelled)
-          const p1Due=spDeals.filter(d=>d.p1_date===payMonth)
-          const p2Due=spDeals.filter(d=>d.p2_date===payMonth&&!d.p2_voided)
-          const p1Tot=p1Due.reduce((s,d)=>s+d.p1,0)
-          const p2Tot=p2Due.reduce((s,d)=>s+d.p2,0)
-          const PayRow=({d,which})=>{
-            const amount=which==='p1'?d.p1:d.p2, paid=which==='p1'?d.p1_paid:d.p2_paid
-            return(
-              <tr>
-                <td style={{...td,fontWeight:700}}>{d.client}</td>
-                <td style={td}>{d.month}</td>
-                <td style={{...td,color:accentColor,fontWeight:700}}>{fmt(amount)}</td>
-                <td style={td}><Badge paid={paid}/></td>
-                <td style={td}><PaySel deal={d}/></td>
-                <td style={td}><ApprCell item={d} table='deals' setter={setDeals}/></td>
-                {isAdmin&&<td style={td}><button onClick={e=>{e.stopPropagation();which==='p1'?toggleP1(d):toggleP2(d)}} style={aBtn(paid?'#991b1b':'#065f46',paid?'#fee2e2':'#d1fae5')}>{paid?'↩ Unpaid':'✓ Mark Paid'}</button></td>}
-              </tr>
-            )
-          }
+          // Only Luke-approved, non-cancelled deals
+          const spDeals = deals.filter(d=>d.approved_luke&&!d.cancelled)
+          const p1Due   = spDeals.filter(d=>d.p1_date===payMonth)
+          const p2Due   = spDeals.filter(d=>d.p2_date===payMonth&&!d.p2_voided)
+          // Clawbacks/outstanding where cancellation_date falls in selected month
+          const clawbackDeals = deals.filter(d=>d.cancelled&&d.cancellation_date===payMonth)
+          const p1Tot   = p1Due.reduce((s,d)=>s+(d.p1||0),0)
+          const p2Tot   = p2Due.reduce((s,d)=>s+(d.p2||0),0)
+          const cbTot   = clawbackDeals.reduce((s,d)=>s+(d.clawback_amount||0),0)
+          const netTot  = p1Tot + p2Tot + cbTot // cbTot is negative for clawbacks
+
+          const dealTypeBadge = (d) => (
+            <span style={{padding:'2px 7px',borderRadius:6,fontSize:10,fontWeight:700,
+              background:d.deal_type==='upsell'?'rgba(245,158,11,0.15)':'rgba(99,102,241,0.12)',
+              color:d.deal_type==='upsell'?'#92400e':'#4338ca'}}>
+              {d.deal_type==='upsell'?'Upsell 4%':'New 8%'}
+            </span>
+          )
+
+          const SectionHeader = ({label,total,color,bg}) => (
+            <div style={{padding:'10px 16px',background:bg,borderBottom:'1px solid #e2e8f0',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span style={{fontWeight:700,color,fontSize:13}}>{label}</span>
+              <span style={{fontWeight:700,color,fontSize:13}}>{fmt(total)}</span>
+            </div>
+          )
+
           return(
             <div>
+              {/* Month selector */}
               <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20,flexWrap:'wrap'}}>
                 <span style={{fontWeight:700,color:'#1e293b',fontSize:14}}>Select Month:</span>
-                <select value={payMonth} onChange={e=>setPayMonth(e.target.value)} style={{padding:'8px 14px',borderRadius:8,border:'1px solid #cbd5e1',fontSize:13,fontWeight:600}}>
+                <select value={payMonth} onChange={e=>setPayMonth(e.target.value)}
+                  style={{padding:'8px 14px',borderRadius:8,border:'1px solid #cbd5e1',fontSize:13,fontWeight:600,color:'#1e293b'}}>
                   {MONTHS.map(m=><option key={m}>{m}</option>)}
                 </select>
-                <span style={{fontSize:12,color:'#64748b'}}>Luke-approved deals only · {displayName}</span>
+                <span style={{fontSize:12,color:'#64748b'}}>Luke-approved deals only · {displayName||profile?.name}</span>
               </div>
-              <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:14,marginBottom:20}}>
-                <StatCard label={`P1 Payable — ${payMonth}`} value={fmt(p1Tot)} color='#6366f1'/>
-                <StatCard label={`P2 Payable — ${payMonth}`} value={fmt(p2Tot)} color='#8b5cf6'/>
-                <StatCard label='Total Payable This Month' value={fmt(p1Tot+p2Tot)} color={accentColor}/>
+
+              {/* Summary cards */}
+              <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:24}}>
+                <StatCard label={`P1 Payable`} value={fmt(p1Tot)} color='#6366f1' sub={`${p1Due.length} deal${p1Due.length!==1?'s':''}`}/>
+                <StatCard label={`P2 Payable`} value={fmt(p2Tot)} color='#8b5cf6' sub={`${p2Due.length} deal${p2Due.length!==1?'s':''}`}/>
+                <StatCard label='Clawbacks / Outstanding' value={fmt(Math.abs(cbTot))} color={cbTot<0?'#ef4444':cbTot>0?'#10b981':'#94a3b8'} sub={cbTot<0?'To recover':cbTot>0?'Still owed':'None this month'}/>
+                <StatCard label='Net Payable' value={fmt(netTot)} color={accentColor} sub={`${payMonth} total`}/>
               </div>
+
+              {/* P1 Section */}
               <div style={{...card,padding:0,overflow:'hidden',marginBottom:16}}>
-                <div style={{padding:'10px 16px',background:'rgba(99,102,241,0.06)',borderBottom:'1px solid #e2e8f0',display:'flex',justifyContent:'space-between'}}>
-                  <span style={{fontWeight:700,color:'#6366f1',fontSize:13}}>Payout 1 — {payMonth}</span>
-                  <span style={{fontWeight:700,color:'#6366f1',fontSize:13}}>{fmt(p1Tot)}</span>
-                </div>
-                {p1Due.length===0?<div style={{padding:24,textAlign:'center',color:'#94a3b8'}}>No P1 payouts due in {payMonth}</div>
-                :<div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Client','Deal Month','P1 Amount','Status','Client 1st Payment','Approvals',...(isAdmin?['Action']:[])].map(h=><th key={h} style={th}>{h}</th>)}</tr></thead><tbody>{p1Due.map(d=><PayRow key={d.id} d={d} which='p1'/>)}</tbody></table></div>}
+                <SectionHeader label={`Payout 1 — ${payMonth}`} total={p1Tot} color='#6366f1' bg='rgba(99,102,241,0.06)'/>
+                {p1Due.length===0
+                  ?<div style={{padding:24,textAlign:'center',color:'#94a3b8',fontSize:13}}>No P1 payouts due in {payMonth}</div>
+                  :<div style={{overflowX:'auto'}}>
+                    <table style={{width:'100%',borderCollapse:'collapse'}}>
+                      <thead><tr>
+                        {['Client','Deal Month','Deal Type','Monthly Deal','Commission','P1 Amount','Status','Client 1st Payment','Approvals',...(isAdmin?['Action']:[])].map(h=><th key={h} style={th}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {p1Due.map(d=>(
+                          <tr key={d.id} style={{background:d.p1_paid?'#f0fdf4':'#fff'}}>
+                            <td style={{...td,fontWeight:700}}>{d.client}</td>
+                            <td style={td}>{d.month}</td>
+                            <td style={td}>{dealTypeBadge(d)}</td>
+                            <td style={{...td,color:'#0ea5e9',fontWeight:700}}>{fmt(isBH?calcBHTotalLic(d):d.total)}</td>
+                            <td style={{...td,color:accentColor,fontWeight:700}}>{fmt(d.comm)}</td>
+                            <td style={{...td,fontWeight:800,color:'#6366f1'}}>{fmt(d.p1)}</td>
+                            <td style={td}><Badge paid={d.p1_paid}/></td>
+                            <td style={td}><PaySel deal={d}/></td>
+                            <td style={td}><ApprCell item={d} table='deals' setter={setDeals}/></td>
+                            {isAdmin&&<td style={td}>
+                              <button onClick={e=>{e.stopPropagation();toggleP1(d)}}
+                                style={aBtn(d.p1_paid?'#991b1b':'#065f46',d.p1_paid?'#fee2e2':'#d1fae5')}>
+                                {d.p1_paid?'↩ Unpaid':'✓ Mark Paid'}
+                              </button>
+                            </td>}
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{background:'#f8fafc'}}>
+                          <td style={{...td,fontWeight:800}} colSpan={5}>P1 TOTAL</td>
+                          <td style={{...td,fontWeight:800,color:'#6366f1'}}>{fmt(p1Tot)}</td>
+                          <td style={{...td,fontSize:11,color:'#10b981',fontWeight:700}}>{fmt(p1Due.reduce((s,d)=>s+(d.p1_paid?d.p1:0),0))} paid</td>
+                          <td colSpan={isAdmin?3:2}></td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                }
               </div>
-              <div style={{...card,padding:0,overflow:'hidden'}}>
-                <div style={{padding:'10px 16px',background:'rgba(139,92,246,0.06)',borderBottom:'1px solid #e2e8f0',display:'flex',justifyContent:'space-between'}}>
-                  <span style={{fontWeight:700,color:'#8b5cf6',fontSize:13}}>Payout 2 — {payMonth}</span>
-                  <span style={{fontWeight:700,color:'#8b5cf6',fontSize:13}}>{fmt(p2Tot)}</span>
+
+              {/* P2 Section */}
+              <div style={{...card,padding:0,overflow:'hidden',marginBottom:16}}>
+                <SectionHeader label={`Payout 2 — ${payMonth}`} total={p2Tot} color='#8b5cf6' bg='rgba(139,92,246,0.06)'/>
+                {p2Due.length===0
+                  ?<div style={{padding:24,textAlign:'center',color:'#94a3b8',fontSize:13}}>No P2 payouts due in {payMonth}</div>
+                  :<div style={{overflowX:'auto'}}>
+                    <table style={{width:'100%',borderCollapse:'collapse'}}>
+                      <thead><tr>
+                        {['Client','Deal Month','Deal Type','Monthly Deal','Commission','P2 Amount','Status','Approvals',...(isAdmin?['Action']:[])].map(h=><th key={h} style={th}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {p2Due.map(d=>(
+                          <tr key={d.id} style={{background:d.p2_paid?'#f0fdf4':'#fff'}}>
+                            <td style={{...td,fontWeight:700}}>{d.client}</td>
+                            <td style={td}>{d.month}</td>
+                            <td style={td}>{dealTypeBadge(d)}</td>
+                            <td style={{...td,color:'#0ea5e9',fontWeight:700}}>{fmt(isBH?calcBHTotalLic(d):d.total)}</td>
+                            <td style={{...td,color:accentColor,fontWeight:700}}>{fmt(d.comm)}</td>
+                            <td style={{...td,fontWeight:800,color:'#8b5cf6'}}>{fmt(d.p2)}</td>
+                            <td style={td}><Badge paid={d.p2_paid}/></td>
+                            <td style={td}><ApprCell item={d} table='deals' setter={setDeals}/></td>
+                            {isAdmin&&<td style={td}>
+                              <button onClick={e=>{e.stopPropagation();toggleP2(d)}}
+                                style={aBtn(d.p2_paid?'#991b1b':'#065f46',d.p2_paid?'#fee2e2':'#d1fae5')}>
+                                {d.p2_paid?'↩ Unpaid':'✓ Mark Paid'}
+                              </button>
+                            </td>}
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{background:'#f8fafc'}}>
+                          <td style={{...td,fontWeight:800}} colSpan={5}>P2 TOTAL</td>
+                          <td style={{...td,fontWeight:800,color:'#8b5cf6'}}>{fmt(p2Tot)}</td>
+                          <td style={{...td,fontSize:11,color:'#10b981',fontWeight:700}}>{fmt(p2Due.reduce((s,d)=>s+(d.p2_paid?d.p2:0),0))} paid</td>
+                          <td colSpan={isAdmin?2:1}></td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                }
+              </div>
+
+              {/* Clawbacks / Outstanding Section */}
+              <div style={{...card,padding:0,overflow:'hidden',marginBottom:16}}>
+                <div style={{padding:'10px 16px',background:clawbackDeals.length>0?'rgba(239,68,68,0.06)':'#f8fafc',borderBottom:'1px solid #e2e8f0',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{fontWeight:700,color:cbTot<0?'#ef4444':cbTot>0?'#10b981':'#64748b',fontSize:13}}>
+                    Clawbacks & Outstanding Comm — {payMonth}
+                  </span>
+                  <span style={{fontWeight:700,color:cbTot<0?'#ef4444':cbTot>0?'#10b981':'#64748b',fontSize:13}}>
+                    {cbTot<0?`-${fmt(Math.abs(cbTot))}`:fmt(cbTot)}
+                  </span>
                 </div>
-                {p2Due.length===0?<div style={{padding:24,textAlign:'center',color:'#94a3b8'}}>No P2 payouts due in {payMonth}</div>
-                :<div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse'}}><thead><tr>{['Client','Deal Month','P2 Amount','Status','Client 1st Payment','Approvals',...(isAdmin?['Action']:[])].map(h=><th key={h} style={th}>{h}</th>)}</tr></thead><tbody>{p2Due.map(d=><PayRow key={d.id} d={d} which='p2'/>)}</tbody></table></div>}
+                {clawbackDeals.length===0
+                  ?<div style={{padding:24,textAlign:'center',color:'#94a3b8',fontSize:13}}>No cancellations recorded in {payMonth}</div>
+                  :<div style={{overflowX:'auto'}}>
+                    <table style={{width:'100%',borderCollapse:'collapse'}}>
+                      <thead><tr>
+                        {['Client','Deal Month','Deal Type','Comm Paid Out','Active Months','Earned Comm','Difference','Type','Settled',...(isAdmin?['Action']:[])].map(h=><th key={h} style={th}>{h}</th>)}
+                      </tr></thead>
+                      <tbody>
+                        {clawbackDeals.map(d=>{
+                          const paidOut=(d.p1_paid?d.p1:0)+(d.p2_paid?d.p2:0)
+                          const earned=d.recalculated_comm||0
+                          const diff=d.clawback_amount||0
+                          const isClawback=diff<0
+                          return(
+                            <tr key={d.id} style={{background:isClawback?'#fff5f5':'#f0fdf4'}}>
+                              <td style={{...td,fontWeight:700}}>{d.client}</td>
+                              <td style={td}>{d.month}</td>
+                              <td style={td}>{dealTypeBadge(d)}</td>
+                              <td style={{...td,fontWeight:700}}>{fmt(paidOut)}</td>
+                              <td style={td}>{d.active_months} months</td>
+                              <td style={td}>{fmt(earned)}</td>
+                              <td style={{...td,fontWeight:800,color:isClawback?'#ef4444':'#10b981'}}>
+                                {isClawback?`-${fmt(Math.abs(diff))}`:fmt(diff)}
+                              </td>
+                              <td style={td}>
+                                <span style={{padding:'2px 8px',borderRadius:6,fontSize:11,fontWeight:700,
+                                  background:isClawback?'#fee2e2':'#d1fae5',
+                                  color:isClawback?'#991b1b':'#065f46'}}>
+                                  {isClawback?'Clawback':'Still Owed'}
+                                </span>
+                              </td>
+                              <td style={td}>
+                                {d.clawback_settled
+                                  ?<span style={{fontSize:11,color:'#10b981',fontWeight:700}}>✅ Settled</span>
+                                  :<span style={{fontSize:11,color:'#f59e0b',fontWeight:700}}>Pending</span>}
+                              </td>
+                              {isAdmin&&<td style={td}>
+                                {!d.clawback_settled&&(
+                                  <button onClick={e=>{e.stopPropagation();updateCancellation(d.id,true,d.cancellation_date,d.active_months,true)}}
+                                    style={aBtn(isClawback?'#991b1b':'#065f46',isClawback?'#fee2e2':'#d1fae5')}>
+                                    {isClawback?'Mark Recovered':'Mark Paid'}
+                                  </button>
+                                )}
+                              </td>}
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{background:'#f8fafc'}}>
+                          <td style={{...td,fontWeight:800}} colSpan={6}>NET CLAWBACK / OWED</td>
+                          <td style={{...td,fontWeight:800,color:cbTot<0?'#ef4444':'#10b981'}}>
+                            {cbTot<0?`-${fmt(Math.abs(cbTot))}`:fmt(cbTot)}
+                          </td>
+                          <td colSpan={isAdmin?3:2}></td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                }
+              </div>
+
+              {/* Net Payable Summary */}
+              <div style={{...card,background:'linear-gradient(135deg,#1e293b,#334155)',color:'#fff'}}>
+                <div style={{fontSize:12,color:'#94a3b8',marginBottom:12,textTransform:'uppercase',letterSpacing:1}}>
+                  {payMonth} — Net Payable Summary for {displayName||profile?.name}
+                </div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16}}>
+                  <div><div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>P1 Payouts</div><div style={{fontSize:18,fontWeight:800,color:'#818cf8'}}>{fmt(p1Tot)}</div></div>
+                  <div><div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>P2 Payouts</div><div style={{fontSize:18,fontWeight:800,color:'#a78bfa'}}>{fmt(p2Tot)}</div></div>
+                  <div><div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>{cbTot<0?'Clawbacks':cbTot>0?'Still Owed':'Clawbacks'}</div><div style={{fontSize:18,fontWeight:800,color:cbTot<0?'#f87171':cbTot>0?'#34d399':'#94a3b8'}}>{cbTot!==0?(cbTot<0?`-${fmt(Math.abs(cbTot))}`:fmt(cbTot)):fmt(0)}</div></div>
+                  <div style={{borderLeft:'1px solid rgba(255,255,255,0.1)',paddingLeft:16}}>
+                    <div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>NET PAYABLE</div>
+                    <div style={{fontSize:24,fontWeight:800,color:'#34d399'}}>{fmt(netTot)}</div>
+                  </div>
+                </div>
               </div>
             </div>
           )
