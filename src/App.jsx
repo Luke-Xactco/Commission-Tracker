@@ -46,7 +46,7 @@ const calcDealFinancials = (deal, company, salespersonId) => {
 }
 
 const BLANK_XACTCO = {month:'Jan-26',client:'',once_off:0,app_users:0,lite_users:0,a_user_cost:950,l_user_cost:0,admin:1,free_admin:0,admin_cost:1000,dashboards:0,dash_cost:0,billing_date:'',p1_date:'',notes:'',first_payment_received:'TBC',inception_date:'',quote_no:''}
-const BLANK_BH     = {month:'Jan-26',client:'',patrol_qty:0,patrol_rate:0,inspect_qty:0,inspect_rate:0,vm_qty:0,vm_rate:0,ilog_qty:0,ilog_rate:0,invoice_total:0,quote_no:'',inception_date:'',p1_date:'',billing_date:'',notes:'',first_payment_received:'TBC',deal_type:'new'}
+const BLANK_BH     = {month:'Jan-26',client:'',site:'',billing_company:'Bloodhound',patrol_qty:0,patrol_rate:0,inspect_qty:0,inspect_rate:0,vm_qty:0,vm_rate:0,ilog_qty:0,ilog_rate:0,invoice_total:0,quote_no:'',inception_date:'',p1_date:'',billing_date:'',notes:'',first_payment_received:'TBC',deal_type:'new'}
 const BLANK_REF    = {referred_by:'',client:'',mrr:0,date:'',paid:false}
 
 const exportToExcel = async (deals,referrals,name,isLukeView,company) => {
@@ -54,10 +54,10 @@ const exportToExcel = async (deals,referrals,name,isLukeView,company) => {
   const fmtN = (n) => Number(n||0)
   const isBHX = company==='bloodhound'
   const ph = isBHX
-    ?['Client','Month','Deal Type','Patrol Qty','Patrol Rate','Inspect Qty','Inspect Rate','VM Qty','VM Rate','iLog Qty','iLog Rate','Total Lic','Invoice Total','Commission','Payout 1','Comm Pay Date','P1 Status','Client 1st Payment','Payout 2','P2 Date','P2 Status','Quote No','Inception','Cancelled','Cancellation Date','Notes']
+    ?['Client','Site','Billing Company','Month','Deal Type','Patrol Qty','Patrol Rate','Inspect Qty','Inspect Rate','VM Qty','VM Rate','iLog Qty','iLog Rate','Total Lic','Invoice Total','Commission','Payout 1','Comm Pay Date','P1 Status','Client 1st Payment','Payout 2','P2 Date','P2 Status','Quote No','Inception','Cancelled','Cancellation Date','Notes']
     :['Client','Monthly Deal','ARR','Commission','Payout 1','P1 Date','P1 Status','1st Payment',...(!isLukeView?['Payout 2','P2 Date','P2 Status']:[]),'Cancelled','Cancellation Date']
   const pr = deals.map(d=>isBHX?[
-    d.client,d.month,d.deal_type==='upsell'?'Upsell (4%)':'New Client (8%)',
+    d.client,d.site||'',d.billing_company||'Bloodhound',d.month,d.deal_type==='upsell'?'Upsell (4%)':'New Client (8%)',
     d.patrol_qty||0,d.patrol_rate||0,d.inspect_qty||0,d.inspect_rate||0,d.vm_qty||0,d.vm_rate||0,d.ilog_qty||0,d.ilog_rate||0,
     fmtN(calcBHTotalLic(d)),fmtN(d.invoice_total),fmtN(d.comm),
     fmtN(d.p1),d.p1_date||'',d.p1_paid?'PAID':'PENDING',d.first_payment_received||'TBC',
@@ -185,6 +185,10 @@ export default function App() {
   const [loading,setLoading]       = useState(true)
   const [search,setSearch]         = useState('')
   const [payMonth,setPayMonth]     = useState('Jan-26')
+  const [ledger,setLedger]         = useState(null)
+  const [ledgerLoading,setLedgerLoading] = useState(false)
+  const [editOverride,setEditOverride] = useState(false)
+  const [overrideVal,setOverrideVal]   = useState('')
 
   const isBH = (profile?.role==='admin'||profile?.role==='manager')?company==='bloodhound':profile?.company==='bloodhound'
 
@@ -220,6 +224,74 @@ export default function App() {
     setReferrals(data||[])
   }
 
+  const loadLedger = async (spId, month) => {
+    const{data}=await supabase.from('clawback_ledger').select('*')
+      .eq('salesperson_id',spId).eq('company',company).eq('month',month).single()
+    return data||null
+  }
+
+  const computeAndSaveLedger = async (spId, month) => {
+    // Get previous month's closing balance
+    const mIdx = MONTHS.indexOf(month)
+    const prevMonth = mIdx > 0 ? MONTHS[mIdx-1] : null
+    let openingBalance = 0
+    if(prevMonth){
+      const prev = await loadLedger(spId, prevMonth)
+      openingBalance = prev ? (prev.closing_balance||0) : 0
+    }
+    // Get all cancelled deals for this month
+    const{data:cancelledDeals}=await supabase.from('deals').select('*')
+      .eq('salesperson_id',spId).eq('company',company)
+      .eq('cancelled',true).eq('cancellation_date',month)
+    const newClawbacks = (cancelledDeals||[])
+      .filter(d=>(d.clawback_amount||0)<0)
+      .reduce((s,d)=>s+Math.abs(d.clawback_amount||0),0)
+    // Get gross commission for this month (approved, not cancelled)
+    const{data:activeDeals}=await supabase.from('deals').select('*')
+      .eq('salesperson_id',spId).eq('company',company)
+      .eq('approved_luke',true).eq('cancelled',false)
+    const grossComm = (activeDeals||[])
+      .filter(d=>d.p1_date===month||d.p2_date===month)
+      .reduce((s,d)=>{
+        let amt=0
+        if(d.p1_date===month) amt+=d.p1||0
+        if(d.p2_date===month&&!d.p2_voided) amt+=d.p2||0
+        return s+amt
+      },0)
+    const totalOwed = openingBalance + newClawbacks
+    const amountDeducted = Math.min(totalOwed, grossComm)
+    const closingBalance = totalOwed - amountDeducted
+    const netPayable = grossComm - amountDeducted
+    const ledgerData = {
+      salesperson_id:spId, company, month,
+      opening_balance:openingBalance, new_clawbacks:newClawbacks,
+      gross_commission:grossComm, amount_deducted:amountDeducted,
+      closing_balance:closingBalance, written_off:false
+    }
+    // Upsert
+    await supabase.from('clawback_ledger').upsert([ledgerData],{onConflict:'salesperson_id,company,month'})
+    return {...ledgerData, net_payable:netPayable}
+  }
+
+  const saveLedgerOverride = async (spId, month, overrideAmount) => {
+    const{data:existing}=await supabase.from('clawback_ledger').select('*')
+      .eq('salesperson_id',spId).eq('company',company).eq('month',month).single()
+    if(!existing)return
+    const totalOwed=(existing.opening_balance||0)+(existing.new_clawbacks||0)
+    const deducted=Math.min(totalOwed, overrideAmount)
+    const closing=totalOwed-deducted
+    await supabase.from('clawback_ledger').update({
+      override_amount:overrideAmount, amount_deducted:deducted, closing_balance:closing
+    }).eq('salesperson_id',spId).eq('company',company).eq('month',month)
+  }
+
+  const writeLedgerOff = async (spId, month) => {
+    await supabase.from('clawback_ledger').update({
+      written_off:true, closing_balance:0, amount_deducted:0,
+      written_off_date:new Date().toLocaleDateString('en-ZA')
+    }).eq('salesperson_id',spId).eq('company',company).eq('month',month)
+  }
+
   const patchDeals = (id,updates) => {
     setDeals(prev=>prev.map(d=>d.id===id?{...d,...updates}:d))
     setAllDeals(prev=>prev.map(d=>d.id===id?{...d,...updates}:d))
@@ -236,6 +308,7 @@ export default function App() {
   }
 
   const toggleP2 = async (deal) => {
+    if(!deal.p1_paid){alert('P1 must be paid before P2 can be marked.');return}
     const updates={p2_paid:!deal.p2_paid}
     const{error}=await supabase.from('deals').update(updates).eq('id',deal.id)
     if(error){alert('Error: '+error.message);return}
@@ -416,7 +489,7 @@ export default function App() {
   const EditModal = () => {
     if(!editingDeal)return null
     const fields=isBH
-      ?[['Month','month','select'],['Client','client','text'],['Deal Type','deal_type','dtype'],['Patrol Qty','patrol_qty','number'],['Patrol Rate','patrol_rate','number'],['Inspect Qty','inspect_qty','number'],['Inspect Rate','inspect_rate','number'],['VM Qty','vm_qty','number'],['VM Rate','vm_rate','number'],['iLog Qty','ilog_qty','number'],['iLog Rate','ilog_rate','number'],['Invoice Total','invoice_total','number'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['P1 Date','p1_date','select'],['Billing Date','billing_date','text'],['Notes','notes','text']]
+      ?[['Month','month','select'],['Client','client','text'],['Site','site','text'],['Billing Company','billing_company','billing_co'],['Deal Type','deal_type','dtype'],['Patrol Qty','patrol_qty','number'],['Patrol Rate','patrol_rate','number'],['Inspect Qty','inspect_qty','number'],['Inspect Rate','inspect_rate','number'],['VM Qty','vm_qty','number'],['VM Rate','vm_rate','number'],['iLog Qty','ilog_qty','number'],['iLog Rate','ilog_rate','number'],['Invoice Total','invoice_total','number'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['P1 Date','p1_date','select'],['Billing Date','billing_date','text'],['Notes','notes','text']]
       :[['Month','month','select'],['Client','client','text'],['Once Off','once_off','number'],['App Users','app_users','number'],['Lite Users','lite_users','number'],['App User Cost','a_user_cost','number'],['Lite User Cost','l_user_cost','number'],['Admins','admin','number'],['Free Admins','free_admin','number'],['Admin Cost','admin_cost','number'],['Dashboards','dashboards','number'],['Dash Cost','dash_cost','number'],['Billing Date','billing_date','text'],['P1 Date','p1_date','select'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['Notes','notes','text']]
     return(
       <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'#0008',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setEditingDeal(null)}>
@@ -428,6 +501,7 @@ export default function App() {
                 <div style={{fontSize:11,fontWeight:600,color:'#64748b',marginBottom:3}}>{label}</div>
                 {type==='select'?<select value={editingDeal[key]||''} onChange={e=>setEditingDeal(p=>({...p,[key]:e.target.value}))} style={{width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:12}}>{MONTHS.map(m=><option key={m}>{m}</option>)}</select>
                 :type==='dtype'?<select value={editingDeal[key]||'new'} onChange={e=>setEditingDeal(p=>({...p,[key]:e.target.value}))} style={{width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:12}}><option value='new'>New Business (8%)</option><option value='upsell'>Existing Client (4%)</option></select>
+                :type==='billing_co'?<select value={editingDeal[key]||'Bloodhound'} onChange={e=>setEditingDeal(p=>({...p,[key]:e.target.value}))} style={{width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:12}}><option>Bloodhound</option><option>Abstract</option></select>
                 :<input type={type} value={editingDeal[key]||''} onChange={e=>setEditingDeal(p=>({...p,[key]:type==='number'?parseFloat(e.target.value)||0:e.target.value}))} style={{width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:12,boxSizing:'border-box'}}/>}
               </div>
             ))}
@@ -449,7 +523,7 @@ export default function App() {
     const col=isU?'#f59e0b':'#ef4444', bgC=isU?'rgba(245,158,11,0.06)':'rgba(239,68,68,0.06)'
     const bdrC=isU?'rgba(245,158,11,0.25)':'rgba(239,68,68,0.25)', txtC=isU?'#92400e':'#991b1b'
     const bth={...th,padding:'7px 8px',fontSize:11}, btd={...td,padding:'7px 8px',fontSize:11}, p2bg={background:'#faf5ff'}
-    const hdrs=['Client','Month','Monthly Deal','× 12 (ARR)',isU?'Total Comm (4%)':'Total Comm (8%)','Payout 1','Comm Pay Date',isU?'Status':'P1 Status','Client 1st Payment',...(isAdmin?['Finance Action']:[]),...(!isU?['Payout 2','P2 Date','P2 Status',...(isAdmin?['Finance Action']:[])]:[]),'Cancellation','Approvals']
+    const hdrs=['Client','Site','Billing Co','Month','Monthly Deal','× 12 (ARR)',isU?'Total Comm (4%)':'Total Comm (8%)','Payout 1','Comm Pay Date',isU?'Status':'P1 Status','Client 1st Payment',...(isAdmin?['Finance Action']:[]),...(!isU?['Payout 2','P2 Date','P2 Status',...(isAdmin?['Finance Action']:[])]:[]),'Cancellation','Approvals']
     const p2i=hdrs.indexOf('P2 Date')
     return(
       <div style={{marginBottom:24,borderRadius:10,overflow:'hidden',border:`0.5px solid ${bdrC}`,boxShadow:'0 1px 4px rgba(0,0,0,0.04)'}}>
@@ -475,6 +549,8 @@ export default function App() {
                       {d.cancelled&&<span style={{padding:'1px 5px',borderRadius:4,fontSize:10,background:'#fee2e2',color:'#991b1b'}}>Cancelled</span>}
                       {d.p1_paid&&<span style={{fontSize:10,color:'#10b981'}}>P1 paid</span>}
                     </td>
+                    <td style={{...btd,color:'#64748b',fontSize:11}}>{d.site||'—'}</td>
+                    <td style={btd}><span style={{padding:'2px 6px',borderRadius:4,fontSize:10,fontWeight:700,background:d.billing_company==='Abstract'?'rgba(99,102,241,0.12)':'rgba(239,68,68,0.1)',color:d.billing_company==='Abstract'?'#4338ca':'#991b1b'}}>{d.billing_company||'Bloodhound'}</span></td>
                     <td style={{...btd,whiteSpace:'nowrap'}}>{d.month}</td>
                     <td style={{...btd,fontWeight:700,color:'#0ea5e9',whiteSpace:'nowrap'}}>{fmt(lic)}</td>
                     <td style={{...btd,color:'#475569',whiteSpace:'nowrap'}}>{fmt(arr)}</td>
@@ -659,13 +735,15 @@ export default function App() {
               </div>
             )}
             <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10}}>
-              {(isBH?[['Month','month','select'],['Client','client','text'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['Patrol Qty','patrol_qty','number'],['Patrol Rate','patrol_rate','number'],['Inspect Qty','inspect_qty','number'],['Inspect Rate','inspect_rate','number'],['VM Qty','vm_qty','number'],['VM Rate','vm_rate','number'],['iLog Qty','ilog_qty','number'],['iLog Rate','ilog_rate','number'],['Invoice Total','invoice_total','number'],['P1 Date','p1_date','select'],['Billing Date','billing_date','text'],['Notes','notes','text']]
+              {(isBH?[['Month','month','select'],['Client','client','text'],['Site','site','text'],['Billing Company','billing_company','billing_co'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['Patrol Qty','patrol_qty','number'],['Patrol Rate','patrol_rate','number'],['Inspect Qty','inspect_qty','number'],['Inspect Rate','inspect_rate','number'],['VM Qty','vm_qty','number'],['VM Rate','vm_rate','number'],['iLog Qty','ilog_qty','number'],['iLog Rate','ilog_rate','number'],['Invoice Total','invoice_total','number'],['P1 Date','p1_date','select'],['Billing Date','billing_date','text'],['Notes','notes','text']]
               :[['Month','month','select'],['Client','client','text'],['Once Off','once_off','number'],['App Users','app_users','number'],['Lite Users','lite_users','number'],['App User Cost','a_user_cost','number'],['Lite User Cost','l_user_cost','number'],['Admins','admin','number'],['Free Admins','free_admin','number'],['Admin Cost','admin_cost','number'],['Dashboards','dashboards','number'],['Dash Cost','dash_cost','number'],['Billing Date','billing_date','text'],['P1 Date','p1_date','select'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['Notes','notes','text']])
               .map(([label,key,type])=>(
                 <div key={key}>
                   <div style={{fontSize:11,fontWeight:600,color:'#64748b',marginBottom:3}}>{label}</div>
                   {type==='select'
                     ?<select value={newDeal[key]||''} onChange={e=>setNewDeal(p=>({...p,[key]:e.target.value}))} style={{width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:12}}><option value=''>— select —</option>{MONTHS.map(m=><option key={m}>{m}</option>)}</select>
+                    :type==='billing_co'
+                    ?<select value={newDeal[key]||'Bloodhound'} onChange={e=>setNewDeal(p=>({...p,[key]:e.target.value}))} style={{width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:12}}><option>Bloodhound</option><option>Abstract</option></select>
                     :<input type={type} value={newDeal[key]||''} onChange={e=>setNewDeal(p=>({...p,[key]:type==='number'?parseFloat(e.target.value)||0:e.target.value}))} style={{width:'100%',padding:'6px 8px',borderRadius:6,border:'1px solid #cbd5e1',fontSize:12,boxSizing:'border-box'}}/>
                   }
                 </div>
@@ -734,16 +812,60 @@ export default function App() {
         )}
 
         {tab==='monthly'&&(()=>{
-          // Only Luke-approved, non-cancelled deals
+          const spId = selectedSP?.id||profile.id
           const spDeals = deals.filter(d=>d.approved_luke&&!d.cancelled)
           const p1Due   = spDeals.filter(d=>d.p1_date===payMonth)
           const p2Due   = spDeals.filter(d=>d.p2_date===payMonth&&!d.p2_voided)
-          // Clawbacks/outstanding where cancellation_date falls in selected month
           const clawbackDeals = deals.filter(d=>d.cancelled&&d.cancellation_date===payMonth)
           const p1Tot   = p1Due.reduce((s,d)=>s+(d.p1||0),0)
           const p2Tot   = p2Due.reduce((s,d)=>s+(d.p2||0),0)
-          const cbTot   = clawbackDeals.reduce((s,d)=>s+(d.clawback_amount||0),0)
-          const netTot  = p1Tot + p2Tot + cbTot // cbTot is negative for clawbacks
+          const rawCbTot= clawbackDeals.reduce((s,d)=>s+(d.clawback_amount||0),0)
+          const grossComm = p1Tot + p2Tot
+
+          // Ledger values
+          const openingBal    = ledger?.opening_balance||0
+          const newClawbacks  = ledger?.new_clawbacks||0
+          const totalOwed     = openingBal + newClawbacks
+          const amtDeducted   = ledger?.amount_deducted||0
+          const closingBal    = ledger?.closing_balance||0
+          const writtenOff    = ledger?.written_off||false
+          const netPayable    = grossComm - amtDeducted
+
+          const handleMonthChange = async (m) => {
+            setPayMonth(m)
+            setLedger(null)
+            setEditOverride(false)
+            setOverrideVal('')
+            if(isAdmin){
+              setLedgerLoading(true)
+              const result = await computeAndSaveLedger(spId, m)
+              setLedger(result)
+              setLedgerLoading(false)
+            }
+          }
+
+          const handleLoadLedger = async () => {
+            setLedgerLoading(true)
+            const result = await computeAndSaveLedger(spId, payMonth)
+            setLedger(result)
+            setLedgerLoading(false)
+          }
+
+          const handleOverrideSave = async () => {
+            const val = parseFloat(overrideVal)||0
+            await saveLedgerOverride(spId, payMonth, val)
+            const result = await computeAndSaveLedger(spId, payMonth)
+            setLedger(result)
+            setEditOverride(false)
+            setOverrideVal('')
+          }
+
+          const handleWriteOff = async () => {
+            if(!window.confirm('Write off the full outstanding clawback balance? This cannot be undone.'))return
+            await writeLedgerOff(spId, payMonth)
+            const result = await computeAndSaveLedger(spId, payMonth)
+            setLedger(result)
+          }
 
           const dealTypeBadge = (d) => (
             <span style={{padding:'2px 7px',borderRadius:6,fontSize:10,fontWeight:700,
@@ -753,43 +875,124 @@ export default function App() {
             </span>
           )
 
-          const SectionHeader = ({label,total,color,bg}) => (
-            <div style={{padding:'10px 16px',background:bg,borderBottom:'1px solid #e2e8f0',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-              <span style={{fontWeight:700,color,fontSize:13}}>{label}</span>
-              <span style={{fontWeight:700,color,fontSize:13}}>{fmt(total)}</span>
-            </div>
-          )
-
           return(
             <div>
               {/* Month selector */}
               <div style={{display:'flex',alignItems:'center',gap:12,marginBottom:20,flexWrap:'wrap'}}>
                 <span style={{fontWeight:700,color:'#1e293b',fontSize:14}}>Select Month:</span>
-                <select value={payMonth} onChange={e=>setPayMonth(e.target.value)}
+                <select value={payMonth} onChange={e=>handleMonthChange(e.target.value)}
                   style={{padding:'8px 14px',borderRadius:8,border:'1px solid #cbd5e1',fontSize:13,fontWeight:600,color:'#1e293b'}}>
                   {MONTHS.map(m=><option key={m}>{m}</option>)}
                 </select>
-                <span style={{fontSize:12,color:'#64748b'}}>Luke-approved deals only · {displayName||profile?.name}</span>
+                {isAdmin&&!ledger&&!ledgerLoading&&(
+                  <button onClick={handleLoadLedger} style={{padding:'8px 16px',background:accentColor,color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:13}}>
+                    Calculate Settlement
+                  </button>
+                )}
+                {ledgerLoading&&<span style={{fontSize:13,color:'#64748b'}}>Calculating...</span>}
+                <span style={{fontSize:12,color:'#64748b'}}>Luke-approved only · {displayName||profile?.name}</span>
               </div>
 
               {/* Summary cards */}
               <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:14,marginBottom:24}}>
-                <StatCard label={`P1 Payable`} value={fmt(p1Tot)} color='#6366f1' sub={`${p1Due.length} deal${p1Due.length!==1?'s':''}`}/>
-                <StatCard label={`P2 Payable`} value={fmt(p2Tot)} color='#8b5cf6' sub={`${p2Due.length} deal${p2Due.length!==1?'s':''}`}/>
-                <StatCard label='Clawbacks / Outstanding' value={fmt(Math.abs(cbTot))} color={cbTot<0?'#ef4444':cbTot>0?'#10b981':'#94a3b8'} sub={cbTot<0?'To recover':cbTot>0?'Still owed':'None this month'}/>
-                <StatCard label='Net Payable' value={fmt(netTot)} color={accentColor} sub={`${payMonth} total`}/>
+                <StatCard label='P1 Payable' value={fmt(p1Tot)} color='#6366f1' sub={`${p1Due.length} deal${p1Due.length!==1?'s':''}`}/>
+                <StatCard label='P2 Payable' value={fmt(p2Tot)} color='#8b5cf6' sub={`${p2Due.length} deal${p2Due.length!==1?'s':''}`}/>
+                <StatCard label='Gross Commission' value={fmt(grossComm)} color='#0ea5e9' sub='Before clawback deduction'/>
+                <StatCard label='Net Payable' value={fmt(netPayable)} color={netPayable>=0?accentColor:'#ef4444'} sub={ledger?'After clawback deduction':'Click Calculate Settlement'}/>
               </div>
+
+              {/* Clawback Settlement Panel */}
+              {isAdmin&&ledger&&(
+                <div style={{...card,background:'linear-gradient(135deg,#1e293b,#334155)',color:'#fff',marginBottom:24}}>
+                  <div style={{fontSize:11,fontWeight:600,color:'#94a3b8',marginBottom:16,textTransform:'uppercase',letterSpacing:1}}>
+                    {payMonth} — Clawback Settlement for {displayName||profile?.name}
+                    {writtenOff&&<span style={{marginLeft:8,padding:'2px 8px',borderRadius:6,fontSize:11,background:'#10b981',color:'#fff'}}>Written Off</span>}
+                  </div>
+                  <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:24,marginBottom:20}}>
+                    <div>
+                      <div style={{fontSize:12,color:'#94a3b8',marginBottom:12,fontWeight:600}}>CLAWBACK POSITION</div>
+                      <div style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                        <span style={{fontSize:12,color:'#94a3b8'}}>Opening Balance (from prev month)</span>
+                        <span style={{fontSize:13,fontWeight:700,color:'#f87171'}}>{fmt(openingBal)}</span>
+                      </div>
+                      <div style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                        <span style={{fontSize:12,color:'#94a3b8'}}>New Clawbacks This Month</span>
+                        <span style={{fontSize:13,fontWeight:700,color:'#f87171'}}>{fmt(newClawbacks)}</span>
+                      </div>
+                      <div style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                        <span style={{fontSize:12,color:'#94a3b8'}}>Total Clawback Owed</span>
+                        <span style={{fontSize:14,fontWeight:800,color:'#f87171'}}>{fmt(totalOwed)}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:12,color:'#94a3b8',marginBottom:12,fontWeight:600}}>COMMISSION SETTLEMENT</div>
+                      <div style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                        <span style={{fontSize:12,color:'#94a3b8'}}>Gross Commission This Month</span>
+                        <span style={{fontSize:13,fontWeight:700,color:'#60a5fa'}}>{fmt(grossComm)}</span>
+                      </div>
+                      <div style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                        <span style={{fontSize:12,color:'#94a3b8'}}>Less Clawback Deducted</span>
+                        <span style={{fontSize:13,fontWeight:700,color:'#f87171'}}>-{fmt(amtDeducted)}</span>
+                      </div>
+                      <div style={{display:'flex',justifyContent:'space-between',padding:'8px 0',borderBottom:'1px solid rgba(255,255,255,0.1)'}}>
+                        <span style={{fontSize:12,color:'#94a3b8'}}>Net Payable to Salesperson</span>
+                        <span style={{fontSize:14,fontWeight:800,color:'#34d399'}}>{fmt(netPayable)}</span>
+                      </div>
+                      <div style={{display:'flex',justifyContent:'space-between',padding:'8px 0'}}>
+                        <span style={{fontSize:12,color:'#94a3b8'}}>Carry Forward to Next Month</span>
+                        <span style={{fontSize:14,fontWeight:800,color:closingBal>0?'#f87171':'#34d399'}}>{fmt(closingBal)}</span>
+                      </div>
+                    </div>
+                  </div>
+                  {/* Override and Write-off controls */}
+                  {!writtenOff&&(
+                    <div style={{display:'flex',gap:10,alignItems:'center',flexWrap:'wrap',paddingTop:12,borderTop:'1px solid rgba(255,255,255,0.1)'}}>
+                      {!editOverride?(
+                        <>
+                          <button onClick={()=>{setEditOverride(true);setOverrideVal(String(amtDeducted))}}
+                            style={{padding:'7px 16px',background:'rgba(255,255,255,0.1)',color:'#fff',border:'1px solid rgba(255,255,255,0.2)',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:12}}>
+                            ✏️ Override Deduction Amount
+                          </button>
+                          {totalOwed>0&&<button onClick={handleWriteOff}
+                            style={{padding:'7px 16px',background:'rgba(239,68,68,0.2)',color:'#fca5a5',border:'1px solid rgba(239,68,68,0.3)',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:12}}>
+                            ✕ Write Off Full Balance
+                          </button>}
+                        </>
+                      ):(
+                        <div style={{display:'flex',alignItems:'center',gap:8}}>
+                          <span style={{fontSize:12,color:'#94a3b8'}}>Deduct amount:</span>
+                          <input type="number" value={overrideVal} onChange={e=>setOverrideVal(e.target.value)}
+                            style={{padding:'6px 10px',borderRadius:6,border:'1px solid rgba(255,255,255,0.2)',background:'rgba(255,255,255,0.1)',color:'#fff',fontSize:13,width:120}}/>
+                          <button onClick={handleOverrideSave}
+                            style={{padding:'7px 14px',background:'#10b981',color:'#fff',border:'none',borderRadius:8,fontWeight:700,cursor:'pointer',fontSize:12}}>
+                            Save
+                          </button>
+                          <button onClick={()=>{setEditOverride(false);setOverrideVal('')}}
+                            style={{padding:'7px 14px',background:'rgba(255,255,255,0.1)',color:'#fff',border:'none',borderRadius:8,fontWeight:600,cursor:'pointer',fontSize:12}}>
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* P1 Section */}
               <div style={{...card,padding:0,overflow:'hidden',marginBottom:16}}>
-                <SectionHeader label={`Payout 1 — ${payMonth}`} total={p1Tot} color='#6366f1' bg='rgba(99,102,241,0.06)'/>
+                <div style={{padding:'10px 16px',background:'rgba(99,102,241,0.06)',borderBottom:'1px solid #e2e8f0',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{fontWeight:700,color:'#6366f1',fontSize:13}}>Payout 1 — {payMonth}</span>
+                  <div style={{display:'flex',gap:16,alignItems:'center'}}>
+                    <span style={{fontSize:12,color:'#10b981',fontWeight:600}}>{fmt(p1Due.filter(d=>d.p1_paid).reduce((s,d)=>s+(d.p1||0),0))} paid</span>
+                    <span style={{fontSize:12,color:'#f59e0b',fontWeight:600}}>{fmt(p1Due.filter(d=>!d.p1_paid).reduce((s,d)=>s+(d.p1||0),0))} to pay</span>
+                    <span style={{fontWeight:700,color:'#6366f1',fontSize:13}}>{fmt(p1Tot)} total</span>
+                  </div>
+                </div>
                 {p1Due.length===0
                   ?<div style={{padding:24,textAlign:'center',color:'#94a3b8',fontSize:13}}>No P1 payouts due in {payMonth}</div>
                   :<div style={{overflowX:'auto'}}>
                     <table style={{width:'100%',borderCollapse:'collapse'}}>
-                      <thead><tr>
-                        {['Client','Deal Month','Deal Type','Monthly Deal','Commission','P1 Amount','Status','Client 1st Payment','Approvals',...(isAdmin?['Action']:[])].map(h=><th key={h} style={th}>{h}</th>)}
-                      </tr></thead>
+                      <thead><tr>{['Client','Deal Month','Deal Type','Monthly Deal','Commission','P1 Amount','Status','Client 1st Payment','Approvals',...(isAdmin?['Action']:[])].map(h=><th key={h} style={th}>{h}</th>)}</tr></thead>
                       <tbody>
                         {p1Due.map(d=>(
                           <tr key={d.id} style={{background:d.p1_paid?'#f0fdf4':'#fff'}}>
@@ -811,14 +1014,12 @@ export default function App() {
                           </tr>
                         ))}
                       </tbody>
-                      <tfoot>
-                        <tr style={{background:'#f8fafc'}}>
-                          <td style={{...td,fontWeight:800}} colSpan={5}>P1 TOTAL</td>
-                          <td style={{...td,fontWeight:800,color:'#6366f1'}}>{fmt(p1Tot)}</td>
-                          <td style={{...td,fontSize:11,color:'#10b981',fontWeight:700}}>{fmt(p1Due.reduce((s,d)=>s+(d.p1_paid?d.p1:0),0))} paid</td>
-                          <td colSpan={isAdmin?3:2}></td>
-                        </tr>
-                      </tfoot>
+                      <tfoot><tr style={{background:'#f8fafc'}}>
+                        <td style={{...td,fontWeight:800}} colSpan={5}>P1 TOTAL</td>
+                        <td style={{...td,fontWeight:800,color:'#6366f1'}}>{fmt(p1Tot)}</td>
+                        <td style={{...td,fontSize:11,color:'#10b981',fontWeight:700}}>{fmt(p1Due.filter(d=>d.p1_paid).reduce((s,d)=>s+(d.p1||0),0))} paid</td>
+                        <td colSpan={isAdmin?3:2}></td>
+                      </tr></tfoot>
                     </table>
                   </div>
                 }
@@ -826,14 +1027,19 @@ export default function App() {
 
               {/* P2 Section */}
               <div style={{...card,padding:0,overflow:'hidden',marginBottom:16}}>
-                <SectionHeader label={`Payout 2 — ${payMonth}`} total={p2Tot} color='#8b5cf6' bg='rgba(139,92,246,0.06)'/>
+                <div style={{padding:'10px 16px',background:'rgba(139,92,246,0.06)',borderBottom:'1px solid #e2e8f0',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                  <span style={{fontWeight:700,color:'#8b5cf6',fontSize:13}}>Payout 2 — {payMonth}</span>
+                  <div style={{display:'flex',gap:16,alignItems:'center'}}>
+                    <span style={{fontSize:12,color:'#10b981',fontWeight:600}}>{fmt(p2Due.filter(d=>d.p2_paid).reduce((s,d)=>s+(d.p2||0),0))} paid</span>
+                    <span style={{fontSize:12,color:'#f59e0b',fontWeight:600}}>{fmt(p2Due.filter(d=>!d.p2_paid).reduce((s,d)=>s+(d.p2||0),0))} to pay</span>
+                    <span style={{fontWeight:700,color:'#8b5cf6',fontSize:13}}>{fmt(p2Tot)} total</span>
+                  </div>
+                </div>
                 {p2Due.length===0
                   ?<div style={{padding:24,textAlign:'center',color:'#94a3b8',fontSize:13}}>No P2 payouts due in {payMonth}</div>
                   :<div style={{overflowX:'auto'}}>
                     <table style={{width:'100%',borderCollapse:'collapse'}}>
-                      <thead><tr>
-                        {['Client','Deal Month','Deal Type','Monthly Deal','Commission','P2 Amount','Status','Approvals',...(isAdmin?['Action']:[])].map(h=><th key={h} style={th}>{h}</th>)}
-                      </tr></thead>
+                      <thead><tr>{['Client','Deal Month','Deal Type','Monthly Deal','Commission','P2 Amount','Status','Approvals',...(isAdmin?['Action']:[])].map(h=><th key={h} style={th}>{h}</th>)}</tr></thead>
                       <tbody>
                         {p2Due.map(d=>(
                           <tr key={d.id} style={{background:d.p2_paid?'#f0fdf4':'#fff'}}>
@@ -846,44 +1052,43 @@ export default function App() {
                             <td style={td}><Badge paid={d.p2_paid}/></td>
                             <td style={td}><ApprCell item={d} table='deals' setter={setDeals}/></td>
                             {isAdmin&&<td style={td}>
-                              <button onClick={e=>{e.stopPropagation();toggleP2(d)}}
-                                style={aBtn(d.p2_paid?'#991b1b':'#065f46',d.p2_paid?'#fee2e2':'#d1fae5')}>
-                                {d.p2_paid?'↩ Unpaid':'✓ Mark Paid'}
-                              </button>
+                              {d.p1_paid
+                                ?<button onClick={e=>{e.stopPropagation();toggleP2(d)}}
+                                    style={aBtn(d.p2_paid?'#991b1b':'#065f46',d.p2_paid?'#fee2e2':'#d1fae5')}>
+                                    {d.p2_paid?'↩ Unpaid':'✓ Mark Paid'}
+                                  </button>
+                                :<span style={{fontSize:11,color:'#94a3b8'}}>P1 not paid</span>
+                              }
                             </td>}
                           </tr>
                         ))}
                       </tbody>
-                      <tfoot>
-                        <tr style={{background:'#f8fafc'}}>
-                          <td style={{...td,fontWeight:800}} colSpan={5}>P2 TOTAL</td>
-                          <td style={{...td,fontWeight:800,color:'#8b5cf6'}}>{fmt(p2Tot)}</td>
-                          <td style={{...td,fontSize:11,color:'#10b981',fontWeight:700}}>{fmt(p2Due.reduce((s,d)=>s+(d.p2_paid?d.p2:0),0))} paid</td>
-                          <td colSpan={isAdmin?2:1}></td>
-                        </tr>
-                      </tfoot>
+                      <tfoot><tr style={{background:'#f8fafc'}}>
+                        <td style={{...td,fontWeight:800}} colSpan={5}>P2 TOTAL</td>
+                        <td style={{...td,fontWeight:800,color:'#8b5cf6'}}>{fmt(p2Tot)}</td>
+                        <td style={{...td,fontSize:11,color:'#10b981',fontWeight:700}}>{fmt(p2Due.filter(d=>d.p2_paid).reduce((s,d)=>s+(d.p2||0),0))} paid</td>
+                        <td colSpan={isAdmin?2:1}></td>
+                      </tr></tfoot>
                     </table>
                   </div>
                 }
               </div>
 
-              {/* Clawbacks / Outstanding Section */}
+              {/* Clawbacks Section */}
               <div style={{...card,padding:0,overflow:'hidden',marginBottom:16}}>
                 <div style={{padding:'10px 16px',background:clawbackDeals.length>0?'rgba(239,68,68,0.06)':'#f8fafc',borderBottom:'1px solid #e2e8f0',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-                  <span style={{fontWeight:700,color:cbTot<0?'#ef4444':cbTot>0?'#10b981':'#64748b',fontSize:13}}>
-                    Clawbacks & Outstanding Comm — {payMonth}
+                  <span style={{fontWeight:700,color:rawCbTot<0?'#ef4444':rawCbTot>0?'#10b981':'#64748b',fontSize:13}}>
+                    Clawbacks & Outstanding — {payMonth}
                   </span>
-                  <span style={{fontWeight:700,color:cbTot<0?'#ef4444':cbTot>0?'#10b981':'#64748b',fontSize:13}}>
-                    {cbTot<0?`-${fmt(Math.abs(cbTot))}`:fmt(cbTot)}
+                  <span style={{fontWeight:700,color:rawCbTot<0?'#ef4444':rawCbTot>0?'#10b981':'#64748b',fontSize:13}}>
+                    {rawCbTot<0?`-${fmt(Math.abs(rawCbTot))}`:fmt(rawCbTot)}
                   </span>
                 </div>
                 {clawbackDeals.length===0
                   ?<div style={{padding:24,textAlign:'center',color:'#94a3b8',fontSize:13}}>No cancellations recorded in {payMonth}</div>
                   :<div style={{overflowX:'auto'}}>
                     <table style={{width:'100%',borderCollapse:'collapse'}}>
-                      <thead><tr>
-                        {['Client','Deal Month','Deal Type','Comm Paid Out','Active Months','Earned Comm','Difference','Type','Settled',...(isAdmin?['Action']:[])].map(h=><th key={h} style={th}>{h}</th>)}
-                      </tr></thead>
+                      <thead><tr>{['Client','Deal Month','Deal Type','Comm Paid Out','Active Months','Earned Comm','Difference','Type','Settled',...(isAdmin?['Action']:[])].map(h=><th key={h} style={th}>{h}</th>)}</tr></thead>
                       <tbody>
                         {clawbackDeals.map(d=>{
                           const paidOut=(d.p1_paid?d.p1:0)+(d.p2_paid?d.p2:0)
@@ -903,14 +1108,13 @@ export default function App() {
                               </td>
                               <td style={td}>
                                 <span style={{padding:'2px 8px',borderRadius:6,fontSize:11,fontWeight:700,
-                                  background:isClawback?'#fee2e2':'#d1fae5',
-                                  color:isClawback?'#991b1b':'#065f46'}}>
+                                  background:isClawback?'#fee2e2':'#d1fae5',color:isClawback?'#991b1b':'#065f46'}}>
                                   {isClawback?'Clawback':'Still Owed'}
                                 </span>
                               </td>
                               <td style={td}>
                                 {d.clawback_settled
-                                  ?<span style={{fontSize:11,color:'#10b981',fontWeight:700}}>✅ Settled</span>
+                                  ?<span style={{fontSize:11,color:'#10b981',fontWeight:700}}>Settled</span>
                                   :<span style={{fontSize:11,color:'#f59e0b',fontWeight:700}}>Pending</span>}
                               </td>
                               {isAdmin&&<td style={td}>
@@ -925,32 +1129,31 @@ export default function App() {
                           )
                         })}
                       </tbody>
-                      <tfoot>
-                        <tr style={{background:'#f8fafc'}}>
-                          <td style={{...td,fontWeight:800}} colSpan={6}>NET CLAWBACK / OWED</td>
-                          <td style={{...td,fontWeight:800,color:cbTot<0?'#ef4444':'#10b981'}}>
-                            {cbTot<0?`-${fmt(Math.abs(cbTot))}`:fmt(cbTot)}
-                          </td>
-                          <td colSpan={isAdmin?3:2}></td>
-                        </tr>
-                      </tfoot>
+                      <tfoot><tr style={{background:'#f8fafc'}}>
+                        <td style={{...td,fontWeight:800}} colSpan={6}>NET</td>
+                        <td style={{...td,fontWeight:800,color:rawCbTot<0?'#ef4444':'#10b981'}}>
+                          {rawCbTot<0?`-${fmt(Math.abs(rawCbTot))}`:fmt(rawCbTot)}
+                        </td>
+                        <td colSpan={isAdmin?3:2}></td>
+                      </tr></tfoot>
                     </table>
                   </div>
                 }
               </div>
 
-              {/* Net Payable Summary */}
-              <div style={{...card,background:'linear-gradient(135deg,#1e293b,#334155)',color:'#fff'}}>
+              {/* Net Payable Summary Banner */}
+              <div style={{...card,background:'linear-gradient(135deg,#0f172a,#1e293b)',color:'#fff'}}>
                 <div style={{fontSize:12,color:'#94a3b8',marginBottom:12,textTransform:'uppercase',letterSpacing:1}}>
-                  {payMonth} — Net Payable Summary for {displayName||profile?.name}
+                  {payMonth} — Final Settlement · {displayName||profile?.name}
                 </div>
-                <div style={{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:16}}>
-                  <div><div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>P1 Payouts</div><div style={{fontSize:18,fontWeight:800,color:'#818cf8'}}>{fmt(p1Tot)}</div></div>
-                  <div><div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>P2 Payouts</div><div style={{fontSize:18,fontWeight:800,color:'#a78bfa'}}>{fmt(p2Tot)}</div></div>
-                  <div><div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>{cbTot<0?'Clawbacks':cbTot>0?'Still Owed':'Clawbacks'}</div><div style={{fontSize:18,fontWeight:800,color:cbTot<0?'#f87171':cbTot>0?'#34d399':'#94a3b8'}}>{cbTot!==0?(cbTot<0?`-${fmt(Math.abs(cbTot))}`:fmt(cbTot)):fmt(0)}</div></div>
+                <div style={{display:'grid',gridTemplateColumns:'repeat(5,1fr)',gap:16}}>
+                  <div><div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>P1 Payouts</div><div style={{fontSize:17,fontWeight:800,color:'#818cf8'}}>{fmt(p1Tot)}</div></div>
+                  <div><div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>P2 Payouts</div><div style={{fontSize:17,fontWeight:800,color:'#a78bfa'}}>{fmt(p2Tot)}</div></div>
+                  <div><div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>Clawback Deducted</div><div style={{fontSize:17,fontWeight:800,color:'#f87171'}}>-{fmt(amtDeducted)}</div></div>
+                  <div><div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>Carry Forward</div><div style={{fontSize:17,fontWeight:800,color:closingBal>0?'#fbbf24':'#34d399'}}>{fmt(closingBal)}</div></div>
                   <div style={{borderLeft:'1px solid rgba(255,255,255,0.1)',paddingLeft:16}}>
                     <div style={{fontSize:11,color:'#94a3b8',marginBottom:2}}>NET PAYABLE</div>
-                    <div style={{fontSize:24,fontWeight:800,color:'#34d399'}}>{fmt(netTot)}</div>
+                    <div style={{fontSize:24,fontWeight:800,color:netPayable>=0?'#34d399':'#f87171'}}>{fmt(netPayable)}</div>
                   </div>
                 </div>
               </div>
@@ -962,14 +1165,16 @@ export default function App() {
           <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
             <table style={{width:'100%',borderCollapse:'collapse',background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 1px 4px #0001'}}>
               <thead>
-                {isBH&&<tr><th colSpan={6} style={th}></th><th colSpan={2} style={{...th,background:'rgba(14,165,233,0.1)',color:'#0ea5e9',textAlign:'center'}}>Patrol</th><th colSpan={2} style={{...th,background:'rgba(139,92,246,0.1)',color:'#8b5cf6',textAlign:'center'}}>Inspect</th><th colSpan={2} style={{...th,background:'rgba(245,158,11,0.1)',color:'#f59e0b',textAlign:'center'}}>VM</th><th colSpan={2} style={{...th,background:'rgba(16,185,129,0.1)',color:'#10b981',textAlign:'center'}}>iLog</th><th colSpan={7} style={th}></th></tr>}
-                <tr>{isBH?['Month','Client','Deal Type','Quote No','Inception','Invoice','Qty','Rate','Qty','Rate','Qty','Rate','Qty','Rate','Total Lic','Commission','Client 1st Payment','Notes','Cancelled',...(isAdmin?['Actions']:[])].map((h,i)=><th key={i} style={th}>{h}</th>):['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR',commLabel,'Billing Date','Client 1st Payment','Notes','Cancelled',...(isAdmin?['Actions']:[])].map(h=><th key={h} style={th}>{h}</th>)}</tr>
+                {isBH&&<tr><th colSpan={8} style={th}></th><th colSpan={2} style={{...th,background:'rgba(14,165,233,0.1)',color:'#0ea5e9',textAlign:'center'}}>Patrol</th><th colSpan={2} style={{...th,background:'rgba(139,92,246,0.1)',color:'#8b5cf6',textAlign:'center'}}>Inspect</th><th colSpan={2} style={{...th,background:'rgba(245,158,11,0.1)',color:'#f59e0b',textAlign:'center'}}>VM</th><th colSpan={2} style={{...th,background:'rgba(16,185,129,0.1)',color:'#10b981',textAlign:'center'}}>iLog</th><th colSpan={7} style={th}></th></tr>}
+                <tr>{isBH?['Month','Client','Site','Billing Co','Deal Type','Quote No','Inception','Invoice','Qty','Rate','Qty','Rate','Qty','Rate','Qty','Rate','Total Lic','Commission','Client 1st Payment','Notes','Cancelled',...(isAdmin?['Actions']:[])].map((h,i)=><th key={i} style={th}>{h}</th>):['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR',commLabel,'Billing Date','Client 1st Payment','Notes','Cancelled',...(isAdmin?['Actions']:[])].map(h=><th key={h} style={th}>{h}</th>)}</tr>
               </thead>
               <tbody>
                 {deals.map(d=>(
                   <tr key={d.id} style={{background:d.cancelled?'#fff5f5':'#fff'}}>
                     {isBH?<>
                       <td style={td}>{d.month}</td><td style={{...td,fontWeight:700}}>{d.client}</td>
+                      <td style={{...td,color:'#64748b',fontSize:11}}>{d.site||'—'}</td>
+                      <td style={td}><span style={{padding:'2px 6px',borderRadius:4,fontSize:10,fontWeight:700,background:d.billing_company==='Abstract'?'rgba(99,102,241,0.12)':'rgba(239,68,68,0.1)',color:d.billing_company==='Abstract'?'#4338ca':'#991b1b'}}>{d.billing_company||'Bloodhound'}</span></td>
                       <td style={td}><span style={{padding:'2px 7px',borderRadius:8,fontSize:10,fontWeight:700,background:d.deal_type==='upsell'?'rgba(245,158,11,0.15)':'rgba(14,165,233,0.15)',color:d.deal_type==='upsell'?'#92400e':'#0369a1'}}>{d.deal_type==='upsell'?'Existing 4%':'New 8%'}</span></td>
                       <td style={{...td,color:'#64748b',fontSize:11}}>{d.quote_no||'—'}</td><td style={{...td,color:'#64748b',fontSize:11}}>{d.inception_date||'—'}</td>
                       <td style={td}>{fmt(d.invoice_total)}</td>
