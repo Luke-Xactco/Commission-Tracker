@@ -4,6 +4,17 @@ import { supabase } from './supabase'
 const fmt = (n) => `R ${Number(n||0).toLocaleString('en-ZA',{minimumFractionDigits:0,maximumFractionDigits:0})}`
 const MONTHS = ['Nov-24','Dec-24','Jan-25','Feb-25','Mar-25','Apr-25','May-25','Jun-25','Jul-25','Aug-25','Sept-25','Oct-25','Nov-25','Dec-25','Jan-26','Feb-26','Mar-26','Apr-26','May-26','Jun-26','Jul-26','Aug-26','Sept-26','Oct-26','Nov-26','Dec-26','Jan-27','Feb-27','Mar-27','Apr-27','May-27','Jun-27']
 const getP2Month = (p1) => { const i=MONTHS.indexOf(p1); return i!==-1&&MONTHS[i+6]?MONTHS[i+6]:'' }
+const getCurrentMonth = () => {
+  const now = new Date()
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sept','Oct','Nov','Dec']
+  return `${monthNames[now.getMonth()]}-${String(now.getFullYear()).slice(2)}`
+}
+const isOverdue = (payMonth, paid) => {
+  if(paid || !payMonth) return false
+  const payIdx = MONTHS.indexOf(payMonth)
+  const curIdx = MONTHS.indexOf(getCurrentMonth())
+  return payIdx !== -1 && curIdx !== -1 && payIdx < curIdx
+}
 const COMPANY_COLORS = { xactco:'#6366f1', bloodhound:'#ef4444' }
 const LUKE_ID    = 'f3b67113-e524-403e-9191-f3b0621e46a3'
 const BERNARD_ID = 'bc508a11-e937-46a6-acc2-fd7c8e575767'
@@ -184,7 +195,10 @@ export default function App() {
   const [editingDeal,setEditingDeal] = useState(null)
   const [loading,setLoading]       = useState(true)
   const [search,setSearch]         = useState('')
-  const [payMonth,setPayMonth]     = useState('Jan-26')
+  const [searchDetail,setSearchDetail] = useState('')
+  const [searchMonthly,setSearchMonthly] = useState('')
+  const [searchRef,setSearchRef]   = useState('')
+  const [payMonth,setPayMonth]     = useState(getCurrentMonth()||'Jan-26')
   const [ledger,setLedger]         = useState(null)
   const [ledgerLoading,setLedgerLoading] = useState(false)
   const [editOverride,setEditOverride] = useState(false)
@@ -231,22 +245,35 @@ export default function App() {
   }
 
   const computeAndSaveLedger = async (spId, month) => {
-    // Get previous month's closing balance
+    // Get previous month's ledger closing balance
     const mIdx = MONTHS.indexOf(month)
     const prevMonth = mIdx > 0 ? MONTHS[mIdx-1] : null
     let openingBalance = 0
     if(prevMonth){
       const prev = await loadLedger(spId, prevMonth)
-      openingBalance = prev ? (prev.closing_balance||0) : 0
+      if(prev){
+        openingBalance = prev.written_off ? 0 : (prev.closing_balance||0)
+      } else {
+        // No ledger for prev month — check for ALL unsettled clawbacks before this month
+        const{data:allCancelled}=await supabase.from('deals').select('*')
+          .eq('salesperson_id',spId).eq('company',company).eq('cancelled',true).eq('clawback_settled',false)
+        // Sum all unsettled clawbacks where cancellation_date is BEFORE selected month
+        openingBalance = (allCancelled||[])
+          .filter(d=>{
+            const cbIdx=MONTHS.indexOf(d.cancellation_date)
+            return cbIdx!==-1 && cbIdx < mIdx && (d.clawback_amount||0)<0
+          })
+          .reduce((s,d)=>s+Math.abs(d.clawback_amount||0),0)
+      }
     }
-    // Get all cancelled deals for this month
+    // New clawbacks added THIS month specifically
     const{data:cancelledDeals}=await supabase.from('deals').select('*')
       .eq('salesperson_id',spId).eq('company',company)
       .eq('cancelled',true).eq('cancellation_date',month)
     const newClawbacks = (cancelledDeals||[])
-      .filter(d=>(d.clawback_amount||0)<0)
+      .filter(d=>(d.clawback_amount||0)<0&&!d.clawback_settled)
       .reduce((s,d)=>s+Math.abs(d.clawback_amount||0),0)
-    // Get gross commission for this month (approved, not cancelled)
+    // Gross commission for this month (approved + not cancelled)
     const{data:activeDeals}=await supabase.from('deals').select('*')
       .eq('salesperson_id',spId).eq('company',company)
       .eq('approved_luke',true).eq('cancelled',false)
@@ -268,7 +295,6 @@ export default function App() {
       gross_commission:grossComm, amount_deducted:amountDeducted,
       closing_balance:closingBalance, written_off:false
     }
-    // Upsert
     await supabase.from('clawback_ledger').upsert([ledgerData],{onConflict:'salesperson_id,company,month'})
     return {...ledgerData, net_payable:netPayable}
   }
@@ -466,9 +492,12 @@ export default function App() {
       </div>
     )
     const canEdit=isAdmin&&!deal[which==='p1_date'?'p1_paid':'p2_paid']
+    const paid=which==='p1_date'?deal.p1_paid:deal.p2_paid
+    const overdue=isOverdue(val,paid)
     return(
-      <div style={{display:'flex',alignItems:'center',gap:4}}>
+      <div style={{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
         <span>{val||'—'}</span>
+        {overdue&&<span style={{padding:'1px 6px',borderRadius:4,fontSize:10,fontWeight:700,background:'#fee2e2',color:'#991b1b'}}>Overdue</span>}
         {canEdit&&<button onClick={e=>{e.stopPropagation();setEditingDate({id:deal.id,which})}} style={{background:'none',border:'none',cursor:'pointer',fontSize:12,color:accentColor,padding:0}}>✏️</button>}
         {which==='p1_date'&&deal.p1_paid&&deal.p1_paid_date&&<span style={{fontSize:10,color:'#10b981',display:'block'}}>paid {deal.p1_paid_date}</span>}
       </div>
@@ -488,8 +517,11 @@ export default function App() {
 
   const EditModal = () => {
     if(!editingDeal)return null
+    // Salesperson can edit all except deal_type (which affects commission structure)
+    // Admin can edit everything
+    const spCanEdit = !isAdmin
     const fields=isBH
-      ?[['Month','month','select'],['Client','client','text'],['Site','site','text'],['Billing Company','billing_company','billing_co'],['Deal Type','deal_type','dtype'],['Patrol Qty','patrol_qty','number'],['Patrol Rate','patrol_rate','number'],['Inspect Qty','inspect_qty','number'],['Inspect Rate','inspect_rate','number'],['VM Qty','vm_qty','number'],['VM Rate','vm_rate','number'],['iLog Qty','ilog_qty','number'],['iLog Rate','ilog_rate','number'],['Invoice Total','invoice_total','number'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['P1 Date','p1_date','select'],['Billing Date','billing_date','text'],['Notes','notes','text']]
+      ?[['Month','month','select'],['Client','client','text'],['Site','site','text'],['Billing Company','billing_company','billing_co'],...(isAdmin?[['Deal Type','deal_type','dtype']]:[]),['Patrol Qty','patrol_qty','number'],['Patrol Rate','patrol_rate','number'],['Inspect Qty','inspect_qty','number'],['Inspect Rate','inspect_rate','number'],['VM Qty','vm_qty','number'],['VM Rate','vm_rate','number'],['iLog Qty','ilog_qty','number'],['iLog Rate','ilog_rate','number'],['Invoice Total','invoice_total','number'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['P1 Date','p1_date','select'],['Billing Date','billing_date','text'],['Notes','notes','text']]
       :[['Month','month','select'],['Client','client','text'],['Once Off','once_off','number'],['App Users','app_users','number'],['Lite Users','lite_users','number'],['App User Cost','a_user_cost','number'],['Lite User Cost','l_user_cost','number'],['Admins','admin','number'],['Free Admins','free_admin','number'],['Admin Cost','admin_cost','number'],['Dashboards','dashboards','number'],['Dash Cost','dash_cost','number'],['Billing Date','billing_date','text'],['P1 Date','p1_date','select'],['Quote No','quote_no','text'],['Inception Date','inception_date','select'],['Notes','notes','text']]
     return(
       <div style={{position:'fixed',top:0,left:0,right:0,bottom:0,background:'#0008',zIndex:1000,display:'flex',alignItems:'center',justifyContent:'center'}} onClick={()=>setEditingDeal(null)}>
@@ -710,12 +742,14 @@ export default function App() {
           <StatCard label='Pending Clawbacks' value={fmt(totalClawback)} color='#ef4444' sub={totalClawback>0?'Deducted from net comm':'No active clawbacks'}/>
         </div>
 
+
+
         {totalClawback>0&&(
-          <div style={{...card,background:'#fef2f2',border:'1px solid #fecaca',marginBottom:20}}>
-            <div style={{fontSize:13,fontWeight:700,color:'#991b1b',marginBottom:8}}>⚠️ Clawback Summary</div>
+          <div style={{...card,background:'#fef2f2',border:'1px solid #fecaca',marginBottom:16}}>
+            <div style={{fontSize:13,fontWeight:700,color:'#991b1b',marginBottom:8}}>⚠️ Clawback Summary — Pending Recovery</div>
             {deals.filter(d=>d.cancelled&&(d.clawback_amount||0)<0&&!d.clawback_settled).map(d=>(
               <div key={d.id} style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 0',borderBottom:'1px solid #fecaca'}}>
-                <span style={{fontSize:12,color:'#1e293b'}}>{d.client} — {d.month}</span>
+                <span style={{fontSize:12,color:'#1e293b'}}>{d.client} — {d.month} · cancelled {d.cancellation_date}</span>
                 <span style={{fontSize:13,fontWeight:700,color:'#ef4444'}}>{fmt(Math.abs(d.clawback_amount||0))} clawback</span>
               </div>
             ))}
@@ -814,8 +848,8 @@ export default function App() {
         {tab==='monthly'&&(()=>{
           const spId = selectedSP?.id||profile.id
           const spDeals = deals.filter(d=>d.approved_luke&&!d.cancelled)
-          const p1Due   = spDeals.filter(d=>d.p1_date===payMonth)
-          const p2Due   = spDeals.filter(d=>d.p2_date===payMonth&&!d.p2_voided)
+          const p1Due   = spDeals.filter(d=>d.p1_date===payMonth&&(!searchMonthly||d.client?.toLowerCase().includes(searchMonthly.toLowerCase())))
+          const p2Due   = spDeals.filter(d=>d.p2_date===payMonth&&!d.p2_voided&&(!searchMonthly||d.client?.toLowerCase().includes(searchMonthly.toLowerCase())))
           const clawbackDeals = deals.filter(d=>d.cancelled&&d.cancellation_date===payMonth)
           const p1Tot   = p1Due.reduce((s,d)=>s+(d.p1||0),0)
           const p2Tot   = p2Due.reduce((s,d)=>s+(d.p2||0),0)
@@ -891,6 +925,9 @@ export default function App() {
                 )}
                 {ledgerLoading&&<span style={{fontSize:13,color:'#64748b'}}>Calculating...</span>}
                 <span style={{fontSize:12,color:'#64748b'}}>Luke-approved only · {displayName||profile?.name}</span>
+                <input placeholder="Search client..." value={searchMonthly} onChange={e=>setSearchMonthly(e.target.value)}
+                  style={{padding:'7px 12px',borderRadius:8,border:'1px solid #cbd5e1',fontSize:13,width:200,outline:'none'}}/>
+                {searchMonthly&&<button onClick={()=>setSearchMonthly('')} style={{padding:'7px 10px',borderRadius:8,border:'none',background:'#e2e8f0',cursor:'pointer',fontSize:12}}>Clear</button>}
               </div>
 
               {/* Summary cards */}
@@ -1162,6 +1199,15 @@ export default function App() {
         })()}
 
         {tab==='detail'&&deals.length>0&&(
+          <>
+          <div style={{marginBottom:12}}>
+            <input placeholder="Search client..." value={searchDetail} onChange={e=>setSearchDetail(e.target.value)}
+              style={{padding:'7px 12px',borderRadius:8,border:'1px solid #cbd5e1',fontSize:13,width:220,outline:'none'}}/>
+            {searchDetail&&<button onClick={()=>setSearchDetail('')} style={{marginLeft:8,padding:'7px 10px',borderRadius:8,border:'none',background:'#e2e8f0',cursor:'pointer',fontSize:12}}>Clear</button>}
+          </div>
+          </>
+        )}
+        {tab==='detail'&&deals.length>0&&(
           <div style={{overflowX:'auto',WebkitOverflowScrolling:'touch'}}>
             <table style={{width:'100%',borderCollapse:'collapse',background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 1px 4px #0001'}}>
               <thead>
@@ -1169,7 +1215,7 @@ export default function App() {
                 <tr>{isBH?['Month','Client','Site','Billing Co','Deal Type','Quote No','Inception','Invoice','Qty','Rate','Qty','Rate','Qty','Rate','Qty','Rate','Total Lic','Commission','Client 1st Payment','Notes','Cancelled',...(isAdmin?['Actions']:[])].map((h,i)=><th key={i} style={th}>{h}</th>):['Month','Client','Once Off','App Users','Lite Users','Admins','Dashboards','Monthly Total','ARR',commLabel,'Billing Date','Client 1st Payment','Notes','Cancelled',...(isAdmin?['Actions']:[])].map(h=><th key={h} style={th}>{h}</th>)}</tr>
               </thead>
               <tbody>
-                {deals.map(d=>(
+                {deals.filter(d=>!searchDetail||d.client?.toLowerCase().includes(searchDetail.toLowerCase())).map(d=>(
                   <tr key={d.id} style={{background:d.cancelled?'#fff5f5':'#fff'}}>
                     {isBH?<>
                       <td style={td}>{d.month}</td><td style={{...td,fontWeight:700}}>{d.client}</td>
@@ -1187,7 +1233,7 @@ export default function App() {
                       <td style={td}><PaySel deal={d}/></td>
                       <td style={{...td,color:'#64748b',fontSize:11}}>{d.notes||'—'}</td>
                       <td style={td}><CC deal={d}/></td>
-                      {isAdmin&&<td style={td}><div style={{display:'flex',gap:4}}><button onClick={()=>setEditingDeal(d)} style={aBtn('#1e293b','#e2e8f0')}>✏️ Edit</button><button onClick={()=>deleteDeal(d.id)} style={aBtn('#991b1b','#fee2e2')}>🗑</button></div></td>}
+                      <td style={td}><div style={{display:'flex',gap:4}}><button onClick={()=>setEditingDeal(d)} style={aBtn('#1e293b','#e2e8f0')}>✏️ Edit</button>{isAdmin&&<button onClick={()=>deleteDeal(d.id)} style={aBtn('#991b1b','#fee2e2')}>🗑</button>}</div></td>
                     </>:<>
                       <td style={td}>{d.month}</td><td style={{...td,fontWeight:700}}>{d.client}</td>
                       <td style={td}>{fmt(d.once_off)}</td><td style={td}>{d.app_users}</td><td style={td}>{d.lite_users}</td>
@@ -1197,7 +1243,7 @@ export default function App() {
                       <td style={td}>{d.billing_date}</td><td style={td}><PaySel deal={d}/></td>
                       <td style={{...td,color:'#64748b',fontSize:11}}>{d.notes}</td>
                       <td style={td}><CC deal={d}/></td>
-                      {isAdmin&&<td style={td}><div style={{display:'flex',gap:4}}><button onClick={()=>setEditingDeal(d)} style={aBtn('#1e293b','#e2e8f0')}>✏️ Edit</button><button onClick={()=>deleteDeal(d.id)} style={aBtn('#991b1b','#fee2e2')}>🗑</button></div></td>}
+                      <td style={td}><div style={{display:'flex',gap:4}}><button onClick={()=>setEditingDeal(d)} style={aBtn('#1e293b','#e2e8f0')}>✏️ Edit</button>{isAdmin&&<button onClick={()=>deleteDeal(d.id)} style={aBtn('#991b1b','#fee2e2')}>🗑</button>}</div></td>
                     </>}
                   </tr>
                 ))}
@@ -1228,12 +1274,17 @@ export default function App() {
                 </div>
               </div>
             )}
+            <div style={{marginBottom:12}}>
+              <input placeholder="Search client..." value={searchRef} onChange={e=>setSearchRef(e.target.value)}
+                style={{padding:'7px 12px',borderRadius:8,border:'1px solid #cbd5e1',fontSize:13,width:220,outline:'none'}}/>
+              {searchRef&&<button onClick={()=>setSearchRef('')} style={{marginLeft:8,padding:'7px 10px',borderRadius:8,border:'none',background:'#e2e8f0',cursor:'pointer',fontSize:12}}>Clear</button>}
+            </div>
             {referrals.length===0&&!showAddRef&&<div style={{...card,textAlign:'center',color:'#94a3b8',padding:40}}>No referrals yet.</div>}
             {referrals.length>0&&(
               <div style={{overflowX:'auto'}}>
                 <table style={{width:'100%',borderCollapse:'collapse',background:'#fff',borderRadius:12,overflow:'hidden',boxShadow:'0 1px 4px #0001'}}>
                   <thead><tr>{['Referred By','Client','Monthly Fee','25% Bonus','Date','Status','Approvals','Action',''].map((h,i)=><th key={i} style={th}>{h}</th>)}</tr></thead>
-                  <tbody>{referrals.map(r=>(
+                  <tbody>{referrals.filter(r=>!searchRef||r.client?.toLowerCase().includes(searchRef.toLowerCase())||r.referred_by?.toLowerCase().includes(searchRef.toLowerCase())).map(r=>(
                     <tr key={r.id}>
                       <td style={{...td,fontWeight:700}}>{r.referred_by}</td><td style={td}>{r.client}</td>
                       <td style={{...td,color:'#0ea5e9',fontWeight:700}}>{fmt(r.mrr)}</td><td style={{...td,color:accentColor,fontWeight:700}}>{fmt(r.bonus)}</td>
