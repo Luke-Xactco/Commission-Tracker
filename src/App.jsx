@@ -59,13 +59,26 @@ const calcDealFinancials = (deal, company, salespersonId) => {
   }
 }
 
-// ── LIVE CLAWBACK CALCULATION (no ledger table needed) ────────────────────────
+// ── LIVE CLAWBACK CALCULATION ─────────────────────────────────────────────────
+// Uses clawback_absorbed to track partial recoveries across months
+// clawback_remaining = abs(clawback_amount) - clawback_absorbed
 const calcMonthlySettlement = (deals, month) => {
   const mIdx = MONTHS.indexOf(month)
   if(mIdx===-1) return {openingBalance:0,newClawbacks:0,totalOwed:0,grossComm:0,p1Total:0,p2Total:0,deducted:0,netPayable:0,carryForward:0,p1Deals:[],p2Deals:[]}
+  
+  // All unsettled clawbacks — use remaining balance (total minus already absorbed)
   const unsettled = deals.filter(d=>d.cancelled&&(d.clawback_amount||0)<0&&!d.clawback_settled)
-  const openingBalance = unsettled.filter(d=>MONTHS.indexOf(d.cancellation_date)<mIdx).reduce((s,d)=>s+Math.abs(d.clawback_amount||0),0)
-  const newClawbacks   = unsettled.filter(d=>d.cancellation_date===month).reduce((s,d)=>s+Math.abs(d.clawback_amount||0),0)
+  
+  // Opening balance: remaining clawbacks from BEFORE this month
+  const openingBalance = unsettled
+    .filter(d=>MONTHS.indexOf(d.cancellation_date)<mIdx)
+    .reduce((s,d)=>s+Math.max(0,Math.abs(d.clawback_amount||0)-(d.clawback_absorbed||0)),0)
+  
+  // New clawbacks added THIS month (not yet absorbed at all)
+  const newClawbacks = unsettled
+    .filter(d=>d.cancellation_date===month)
+    .reduce((s,d)=>s+Math.max(0,Math.abs(d.clawback_amount||0)-(d.clawback_absorbed||0)),0)
+  
   const approved = deals.filter(d=>d.approved_luke&&!d.cancelled)
   const p1Deals  = approved.filter(d=>d.p1_date===month)
   const p2Deals  = approved.filter(d=>d.p2_date===month&&!d.p2_voided)
@@ -426,16 +439,66 @@ export default function App() {
   const confirmAndPay = async (settlement) => {
     const spId=selectedSP?.id||profile.id
     const {p1Deals,p2Deals,deducted,netPayable} = settlement
+
+    // Mark all P1s paid
     for(const d of p1Deals){
       if(!d.p1_paid){
-        await supabase.from('deals').update({p1_paid:true,p1_paid_date:new Date().toLocaleDateString('en-ZA'),p2_date:getP2Month(d.p1_date),settlement_confirmed:true,settlement_confirmed_by:profile?.name,settlement_confirmed_at:new Date().toISOString(),settlement_net_paid:netPayable,...auditFields(profile?.name)}).eq('id',d.id)
+        await supabase.from('deals').update({
+          p1_paid:true,
+          p1_paid_date:new Date().toLocaleDateString('en-ZA'),
+          p2_date:getP2Month(d.p1_date),
+          settlement_confirmed:true,
+          settlement_confirmed_by:profile?.name,
+          settlement_confirmed_at:new Date().toISOString(),
+          settlement_net_paid:netPayable,
+          ...auditFields(profile?.name)
+        }).eq('id',d.id)
       }
     }
+    // Mark all P2s paid
     for(const d of p2Deals){
       if(!d.p2_paid&&d.p1_paid){
-        await supabase.from('deals').update({p2_paid:true,settlement_confirmed:true,settlement_confirmed_by:profile?.name,settlement_confirmed_at:new Date().toISOString(),...auditFields(profile?.name)}).eq('id',d.id)
+        await supabase.from('deals').update({
+          p2_paid:true,
+          settlement_confirmed:true,
+          settlement_confirmed_by:profile?.name,
+          settlement_confirmed_at:new Date().toISOString(),
+          ...auditFields(profile?.name)
+        }).eq('id',d.id)
       }
     }
+
+    // Record clawback absorption on unsettled clawback deals
+    // Distribute the deducted amount across unsettled clawbacks oldest first
+    if(deducted>0){
+      const mIdx = MONTHS.indexOf(payMonth)
+      const unsettledCBs = deals
+        .filter(d=>d.cancelled&&(d.clawback_amount||0)<0&&!d.clawback_settled)
+        .filter(d=>MONTHS.indexOf(d.cancellation_date)<=mIdx)
+        .sort((a,b)=>MONTHS.indexOf(a.cancellation_date)-MONTHS.indexOf(b.cancellation_date))
+      
+      let remaining = deducted
+      for(const cb of unsettledCBs){
+        if(remaining<=0) break
+        const alreadyAbsorbed = cb.clawback_absorbed||0
+        const totalCB = Math.abs(cb.clawback_amount||0)
+        const stillOwed = totalCB - alreadyAbsorbed
+        if(stillOwed<=0) continue
+        
+        const absorbNow = Math.min(stillOwed, remaining)
+        const newAbsorbed = alreadyAbsorbed + absorbNow
+        const nowSettled = newAbsorbed >= totalCB
+        
+        await supabase.from('deals').update({
+          clawback_absorbed: newAbsorbed,
+          clawback_settled: nowSettled,
+          ...auditFields(profile?.name)
+        }).eq('id', cb.id)
+        
+        remaining -= absorbNow
+      }
+    }
+
     setSettlementStep(0)
     setConfirmingBulkPay(false)
     await reload()
@@ -464,7 +527,7 @@ export default function App() {
   // ── SUMMARY TOTALS ────────────────────────────────────────────────────────
   const totalComm     = deals.reduce((s,d)=>s+(d.cancelled?d.recalculated_comm||0:d.comm||0),0)
   const totalPaid     = deals.reduce((s,d)=>s+(d.p1_paid?d.p1:0)+(d.p2_paid?d.p2:0),0)
-  const totalClawback = deals.filter(d=>d.cancelled&&(d.clawback_amount||0)<0&&!d.clawback_settled).reduce((s,d)=>s+Math.abs(d.clawback_amount||0),0)
+  const totalClawback = deals.filter(d=>d.cancelled&&(d.clawback_amount||0)<0&&!d.clawback_settled).reduce((s,d)=>s+Math.max(0,Math.abs(d.clawback_amount||0)-(d.clawback_absorbed||0)),0)
   const netComm       = totalComm-totalClawback
   const totalOutstanding = netComm-totalPaid
 
@@ -830,7 +893,7 @@ export default function App() {
             {deals.filter(d=>d.cancelled&&(d.clawback_amount||0)<0&&!d.clawback_settled).map(d=>(
               <div key={d.id} style={{display:'flex',justifyContent:'space-between',padding:'5px 0',borderBottom:'1px solid #fecaca'}}>
                 <span style={{fontSize:12,color:'#1e293b'}}>{d.client} — {d.month} · cancelled {d.cancellation_date}</span>
-                <span style={{fontSize:12,fontWeight:700,color:'#ef4444'}}>{fmt(Math.abs(d.clawback_amount||0))} clawback</span>
+                <span style={{fontSize:12,fontWeight:700,color:'#ef4444'}}>{fmt(Math.max(0,Math.abs(d.clawback_amount||0)-(d.clawback_absorbed||0)))} remaining</span>
               </div>
             ))}
             <div style={{marginTop:6,fontSize:13,fontWeight:800,color:'#991b1b',textAlign:'right'}}>Total pending: {fmt(totalClawback)}</div>
